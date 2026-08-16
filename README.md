@@ -9,7 +9,7 @@ Express/SQLite recipe-sharing API (vendored in this repo at
 | | Scope | Method | Verification | Found | Results |
 |---|---|---|---|---|---|
 | **`/security-review`** | Diff only (`main` → branch) | Single-pass LLM read + independent FP filter | None — reasoning only | **1 MEDIUM** (2 more raised, then self-rejected) | [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) |
-| **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only | **2 HIGH / 4 MEDIUM / 1 LOW** (from 13 raw: 4H/5M/4L) — [2 more it couldn't verify](#open-findings-that-neither-scan-could-settle) | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) → [`TRIAGE.md`](TRIAGE.md) |
+| **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only | **2 HIGH / 4 MEDIUM / 1 LOW** (from 13 raw: 4H/5M/4L) — [2 more it couldn't settle](#genuinely-unresolved) | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) → [`TRIAGE.md`](TRIAGE.md) |
 | **Reference pipeline** (`vuln-pipeline`, this repo) | HTTP-reachable attack surface only | Agent writes a PoC, replays it against a live sandboxed instance | Execution — a detector oracle actually has to fire, twice, in two separate containers | **1 HIGH / 1 MEDIUM** (3 crashes submitted, 1 killed on review) | [`REFERENCE-PIPELINE.md`](REFERENCE-PIPELINE.md) |
 
 The short version:
@@ -131,7 +131,7 @@ Three skills, run in sequence, re-runnable as the codebase changes:
   5 MEDIUM / 4 LOW, several under 0.4 confidence).
 - **Triaged:** [`TRIAGE.md`](TRIAGE.md) — 0 duplicates, 6 false positives,
   7 acted-on (**2 HIGH / 4 MEDIUM / 1 LOW**). Two of the seven are flagged
-  `needs_manual_test` — see [below](#open-findings-that-neither-scan-could-settle).
+  `needs_manual_test` — see [below](#genuinely-unresolved).
 
 **The two HIGH findings that survived triage:**
 
@@ -228,7 +228,7 @@ whether the violated invariant was ever an invariant.
 - `targets/eathub/README.md`'s coverage table puts the pipeline's honest reach
   at **3 of the 7** triaged true positives (upload content-type confusion,
   CORS credential reflection, Host-header verification links). The other four
-  are itemised [below](#open-findings-that-neither-scan-could-settle).
+  are itemised [below](#findings-without-an-execution-poc).
 - The flagship finding — the check-then-act race in the like/ranking counter
   (`db.js:140-201`, `bug_00` above) — **isn't in the static triage list at
   all.** It was only found because the pipeline can fire concurrent requests
@@ -237,37 +237,41 @@ whether the violated invariant was ever an invariant.
 
 ---
 
-## Open findings that neither scan could settle
+## Findings without an execution PoC
 
-Not a pipeline-only list: every row below is a **join of the static scan and
-the pipeline**, which is why it sits outside both. Two findings (f001, f004)
-the static scan established as true positives and the pipeline simply can't
-reach; one (f013) the static scan failed to vote on and the pipeline then
-measured into irrelevance; one (f005) both cover, and neither can close.
-Collected here so nothing quietly disappears between the two result files.
+Cross-cutting between §2a and §2b, which is why it sits outside both. **Two
+different kinds of "unverified" get confused here, so they're split.** The
+first group is settled — it just has no PoC. The second is genuinely open.
 
 (`/security-review` isn't in scope for this table — it only ever saw one
 branch's diff. What it structurally cannot find is listed in
 [§1](#what-this-scan-cannot-find).)
 
-| Finding | Sev | Static verdict | Why the pipeline can't settle it | What it needs |
-|---|---|---|---|---|
-| **Google sign-in links a pre-registered local account** (`db.js:553`, f001) | HIGH | 3/3 true positive | Google OAuth is unconfigured in the sandbox by design — no IdP to round-trip against | A local fake IdP + `GOOGLE_CLIENT_ID` in the seed (deferred v2) |
-| **OAuth flow omits `state`** (`google_strategy.js:13`, f004) | MED | true positive | Same — the whole OAuth path is disabled | Same OAuth stub |
-| **Host-header verification links** (`routes/user.js:19`, f005) | MED | **`needs_manual_test`** — 3/3 true positive, but blocked on a precondition | The `ORIGIN_ESCAPE` oracle *does* cover it in the sandbox — but the open question is whether the real ingress forwards an unrecognised `Host` or rejects it, which no sandbox answers | A test against the actual deployment platform (DigitalOcean routes by Host) |
-| **`SESSION_SECRET` dev fallback** (`session_config.js:22`, f003) | MED | true positive, but the scanner's auth-bypass mechanism was refuted | No reachable PoC — it's a fail-open hardening defect, and the server-side session store means a known secret still can't mint a session | Nothing to execute; fix on principle |
-| **Unbounded email regex / ReDoS** (`routes/user.js:23`, f013) | LOW | **`needs_manual_test`** — **0 votes**, all 3 verifiers killed by a session limit | Measured, and it's a non-issue: **0.26 ms** at the 100 kB body cap | Effectively settled by measurement; the 254-char cap costs nothing anyway |
+### Confirmed by triage — only the execution PoC is missing
 
-Reading it back:
+These are **not** open questions. All three carry unanimous verifier votes and
+line-level evidence in [`TRIAGE.md`](TRIAGE.md); they are actionable today. The
+pipeline simply can't reach them, so no crash artifact exists.
 
-- **2 findings are open because of the tooling** — f005 and f013 are the two
-  `needs_manual_test` entries. f013 is the only one that failed for a boring
-  reason (session limit), and the pipeline has since measured it into
-  irrelevance. f005 is the one genuinely worth a human hour.
-- **2 more are open because of a deliberate scope cut** — f001 and f004 both
-  need the OAuth stub. f001 is a HIGH, so this is the most expensive gap in
-  the whole comparison.
-- **1 is open by nature** — f003 has no PoC to write, in any harness.
+| Finding | Sev | `TRIAGE.md` verdict | Why the pipeline can't reach it |
+|---|---|---|---|
+| **Google sign-in links a pre-registered local account** (`db.js:553`, f001) | HIGH | **`exploitable`**, 3/3 TP, confidence 8.7/10 — the strongest finding in the batch | Google OAuth is unconfigured in the sandbox by design; no IdP to round-trip against. Needs a local fake IdP + `GOOGLE_CLIENT_ID` in the seed (deferred v2) |
+| **OAuth flow omits `state`** (`google_strategy.js:13`, f004) | MED | **`exploitable`**, 3/3 TP, confidence 8.0/10 | Same — the whole OAuth path is disabled. Same stub unblocks both |
+| **`SESSION_SECRET` dev fallback** (`session_config.js:22`, f003) | MED | **`mitigated`**, 3/3 TP — real defect, but all three verifiers refuted the scanner's auth-bypass mechanism | Nothing to execute, in any harness: it's a fail-open hardening defect, and the server-side session store means a known secret still can't mint a session |
+
+The OAuth stub is the most expensive gap in this comparison — it is the only
+thing standing between a HIGH-severity, triage-confirmed account takeover and
+a reproducing PoC.
+
+### Genuinely unresolved
+
+The two `needs_manual_test` entries — neither has a verdict anyone should act
+on as-is.
+
+| Finding | Sev | Why it's open | Where it stands |
+|---|---|---|---|
+| **Host-header verification links** (`routes/user.js:19`, f005) | MED | 3/3 TP, but one precondition is *platform* behaviour: does the real ingress forward an unrecognised `Host` or reject it? No source reading and no sandbox answers that | The `ORIGIN_ESCAPE` oracle covers the app-side half. The remaining half needs a test against the actual deployment target (DigitalOcean routes by Host). **The one genuinely worth a human hour.** |
+| **Unbounded email regex / ReDoS** (`routes/user.js:23`, f013) | LOW | **0 votes** — all three verifiers were killed by a session limit before returning a verdict. An infrastructure failure, not an analytical one | Since **settled by the pipeline**: measured at **0.26 ms** against the 100 kB body cap. Effectively a non-issue; the 254-char cap costs nothing anyway |
 
 ---
 
