@@ -54,33 +54,57 @@ branch against `main` — meant for incremental changes, not a codebase audit.
   email into the retained log stream.
 - Full chain: [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md#finding-1--plaintext-credentials-written-to-logs-via-the-error-serializer)
 
-### The static scan saw this code and cleared it
+### Why the static scan cleared the same code — the threat model did it
 
-The whole-codebase scan **had this vulnerability in scope and missed it** —
-worth stating plainly, because it's the sharpest result in this comparison:
+The whole-codebase scan **read these exact lines and passed them**. The
+interesting part is *why*, and the answer is the threat model, not the scanner:
 
 - [`VULN-FINDINGS.md`](VULN-FINDINGS.md) has an entry at exactly these lines,
   under *Checked and clean*: *"Error middleware does not leak. `index.js:68-75`
   returns a generic message and logs the error server-side; no stack or SQL
   text reaches the response."*
-- That scan ran against the `harness-security-scan` tree, which has the
-  `backend-logging` branch as an ancestor — so `index.js:70` was already
-  `req.log.error({ err }, 'unhandled error')` when the scanner read it. Not a
-  stale checkout.
-- The scanner checked the **response** path (does a stack trace reach the
-  client?) and stopped there. It never asked what `pino`'s serializer puts on
-  the **log** line. `/security-review`, looking only at a handful of new
-  commits, did ask.
-- On severity: [`THREAT_MODEL.md`](THREAT_MODEL.md) and
-  [`TRIAGE.md`](TRIAGE.md) score against the **intended production
-  deployment**, not the current local-only state — so "it's only dev, only
-  devs read the logs" isn't how this repo's triage policy would have scored it
-  either, had it been raised.
+- Not a stale checkout: the scan ran against the `harness-security-scan` tree,
+  which has `backend-logging` as an ancestor, so `index.js:70` was already
+  `req.log.error({ err }, 'unhandled error')` when the scanner read it.
+- The scan was **scoped by `THREAT_MODEL.md` sections 3 and 4** — its own
+  header says so. It inherited that document's picture of what matters.
 
-**The lesson isn't that one tool beats the other** — it's attention budget. A
-broad scan spends a fixed amount of reasoning per file over the whole tree; a
-diff review spends all of it on the twelve lines that just changed. Run both,
-and run the broad scan again after a feature lands.
+**Three things in [`THREAT_MODEL.md`](THREAT_MODEL.md) closed the question
+before the scanner got there:**
+
+- **T5's mitigation column asserts it outright: *"secrets are never written to
+  logs"*** — stated as an existing control, not as an open question. A
+  threat-model-scoped scan treats that as settled and moves on.
+- **Logs appear in the model only as an *integrity* asset.** "Audit and request
+  log integrity" (§2) and T20 (forged attribution via spoofed headers) both ask
+  *can an attacker corrupt the log?* — never *what confidential data lands in
+  it?* There is no threat covering logs as a confidentiality sink anywhere in
+  the model.
+- **So "what does `pino`'s error serializer put on the line" was never in the
+  brief.** The scanner checked the response path — does a stack trace reach the
+  client? — which is the question the threat model actually posed, answered it
+  correctly, and stopped.
+
+**What it is *not*:** the local-only framing. `THREAT_MODEL.md:15-23` is
+explicit that the app "runs in local development only and has never been
+deployed" but that threats are **"nonetheless scored against the deployment the
+README documents and the owner intends… Scoring against the intended
+deployment is deliberate."** Nothing was downgraded for being dev-only —
+[`TRIAGE.md`](TRIAGE.md) applies the same rule.
+
+**The lesson: a threat-model-scoped scan inherits the threat model's blind
+spots, including its confident ones.** A mitigation *asserted* in the model
+(`secrets are never written to logs`) is a claim, not a verified fact, and
+the scan will not re-derive it. `/security-review` had no threat model at all,
+read the diff cold, and therefore asked a question the model had already
+declared answered. Two practical consequences:
+
+- Treat mitigation claims in a threat model as **assertions to verify**, not
+  as scope reductions. This one was true when written and false three commits
+  later.
+- Re-run the threat model when a feature changes the shape of the system.
+  Structured logging turned logs into a new data sink; the model still
+  described them as an integrity concern only.
 
 **What it structurally can't catch**, per the skill's own [false-positive
 policy](https://github.com/anthropics/claude-code-security-review#false-positive-filtering):
