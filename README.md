@@ -10,7 +10,7 @@ Express/SQLite recipe-sharing API (vendored in this repo at
 |---|---|---|---|---|---|
 | **`/security-review`** | Diff only (`main` → branch) | Single-pass LLM read + independent FP filter | None — reasoning only | **1 MEDIUM** (2 more raised, then self-rejected) | [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) |
 | **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only | **2 HIGH / 4 MEDIUM / 1 LOW** (from 13 raw: 4H/5M/4L) | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) → [`TRIAGE.md`](TRIAGE.md) |
-| **Reference pipeline** (`vuln-pipeline`, this repo) | HTTP-reachable attack surface only | Agent writes a PoC, replays it against a live sandboxed instance | Execution — a detector oracle actually has to fire, twice, in two separate containers | **1 HIGH / 1 MEDIUM** (3 crashes submitted, 1 killed on review) | [`results/eathub/20260816T195551Z/`](results/eathub/20260816T195551Z/) |
+| **Reference pipeline** (`vuln-pipeline`, this repo) | HTTP-reachable attack surface only | Agent writes a PoC, replays it against a live sandboxed instance | Execution — a detector oracle actually has to fire, twice, in two separate containers | **1 HIGH / 1 MEDIUM** (3 crashes submitted, 1 killed on review) | [`REFERENCE-PIPELINE.md`](REFERENCE-PIPELINE.md) |
 
 The short version:
 
@@ -148,7 +148,9 @@ exceptions, unexpected 5xx, hangs — table in
 - **Run:** Sonnet 5, `run --stream` with 3 parallel find-agents over
   recon-proposed focus areas. Most token-intensive of the three — every find,
   grade, and report step is its own agent in its own container.
-- **Results:** [`results/eathub/20260816T195551Z/`](results/eathub/20260816T195551Z/)
+- **Vulnerabilities found:** [`REFERENCE-PIPELINE.md`](REFERENCE-PIPELINE.md)
+  — write-up of each confirmed bug (root cause, chain, impact, why the severity).
+- **Raw results:** [`results/eathub/20260816T195551Z/`](results/eathub/20260816T195551Z/)
   — [`focus_areas.json`](results/eathub/20260816T195551Z/focus_areas.json)
   (recon output), [`found_bugs.jsonl`](results/eathub/20260816T195551Z/found_bugs.jsonl)
   (crashes as they landed), `run_00N/result.json` (grade verdicts),
@@ -201,7 +203,8 @@ whether the violated invariant was ever an invariant.
 - [`THREAT_MODEL.md`](THREAT_MODEL.md) — EatHub's threat model
 - [`VULN-FINDINGS.md`](VULN-FINDINGS.md) — raw static scan (`/vuln-scan`), 13 findings
 - [`TRIAGE.md`](TRIAGE.md) — triaged static findings, 2 HIGH / 4 MEDIUM / 1 LOW
-- [`results/eathub/20260816T195551Z/`](results/eathub/20260816T195551Z/) — the pipeline run: focus areas, found bugs, grade verdicts, transcripts
+- [`REFERENCE-PIPELINE.md`](REFERENCE-PIPELINE.md) — pipeline vulnerabilities, written up: 1 HIGH / 1 MEDIUM
+- [`results/eathub/20260816T195551Z/`](results/eathub/20260816T195551Z/) — the raw pipeline run: focus areas, found bugs, grade verdicts, transcripts
   - [`reports/manifest.jsonl`](results/eathub/20260816T195551Z/reports/manifest.jsonl) — bug-id assignments
   - [`reports/judge_log.jsonl`](results/eathub/20260816T195551Z/reports/judge_log.jsonl) — NEW/DUP verdicts with reasoning
   - [`reports/bug_01/report.json`](results/eathub/20260816T195551Z/reports/bug_01/report.json) — the HIGH (stored SVG XSS)
