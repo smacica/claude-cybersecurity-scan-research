@@ -1,0 +1,36 @@
+{
+  "target": "eathub",
+  "status": "crash_found",
+  "crash": {
+    "poc_path": "/tmp/poc_unsafe_ct.json",
+    "poc_bytes": "ewogICJkZXRlY3RvciI6ICJVTlNBRkVfQ09OVEVOVF9UWVBFIiwKICAic3RlcHMiOiBbCiAgICB7ICJzZXNzaW9uIjogImFsaWNlIiwgIm1ldGhvZCI6ICJQT1NUIiwgInBhdGgiOiAiL2FwaS9sb2dpbiIsCiAgICAgICJib2R5IjogeyAiZW1haWwiOiAiYWxpY2VAc2VlZC5sb2NhbCIsICJwYXNzd29yZCI6ICJzZWVkLXB3LWFsaWNlIiB9IH0sCiAgICB7ICJzZXNzaW9uIjogImFsaWNlIiwgIm1ldGhvZCI6ICJQT1NUIiwgInBhdGgiOiAiL2FwaS9yZWNpcGVzIiwKICAgICAgIm11bHRpcGFydCI6IHsKICAgICAgICAiZmllbGRzIjogeyAibmFtZSI6ICJFdmlsIFJlY2lwZSIsICJpbmZvIjogIngiLCAicmVjaXBlIjogIltdIiwgImluZ3JlZGllbnRzIjogIltdIiB9LAogICAgICAgICJmaWxlcyI6IFsgeyAiZmllbGQiOiAiaW1hZ2UiLCAiZmlsZW5hbWUiOiAiZXZpbC5zdmciLAogICAgICAgICAgICAgICAgICAgICAiY29udGVudF90eXBlIjogImltYWdlL3N2Zyt4bWwiLAogICAgICAgICAgICAgICAgICAgICAiY29udGVudF9iYXNlNjQiOiAiUEhOMlp5QjRiV3h1Y3owaWFIUjBjRG92TDNkM2R5NTNNeTV2Y21jdk1qQXdNQzl6ZG1jaVBqeHpZM0pwY0hRK1lXeGxjblFvTVNrOEwzTmpjbWx3ZEQ0OEwzTjJaejQ9IiB9IF0KICAgICAgfSB9CiAgXQp9Cg==",
+    "reproduction_command": "/work/run_poc.js /tmp/poc_unsafe_ct.json",
+    "crash_type": "UNSAFE_CONTENT_TYPE",
+    "crash_output": "<<<DETECTION>>>\n{\n  \"fired\": true,\n  \"primary_class\": \"UNSAFE_CONTENT_TYPE\",\n  \"classes\": [\n    \"UNSAFE_CONTENT_TYPE\"\n  ],\n  \"trigger_step_index\": 1,\n  \"evidence\": {\n    \"always_on\": {\n      \"unsafe_content_type\": [\n        {\n          \"stored_path\": \"/data/recipes_pics/2961067898.svg\",\n          \"declared_type\": \"image/svg+xml\",\n          \"served_type\": \"image/svg+xml\",\n          \"sniffed_type\": null,\n          \"active_type\": true\n        }\n      ]\n    },\n    \"declared\": {},\n    \"http\": [\n      {\n        \"step_index\": 0,\n        \"parallel\": false,\n        \"session\": \"alice\",\n        \"method\": \"POST\",\n        \"path\": \"/api/login\",\n        \"route\": \"/api/login\",\n        \"status\": 200,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"user_id\\\":1,\\\"username\\\":\\\"alice\\\",\\\"email\\\":\\\"alice@seed.local\\\",\\\"profile_pic\\\":null,\\\"bio\\\":\\\"Seed user alice.\\\",\\\"likes\\\":[{\\\"like_id\\\":1,\\\"recipe_id\\\":102,\\\"user_id\\\":1,\\\"rating\\\":1}]}\"\n      },\n      {\n        \"step_index\": 1,\n        \"parallel\": false,\n        \"session\": \"alice\",\n        \"method\": \"POST\",\n        \"path\": \"/api/recipes\",\n        \"route\": \"/api/recipes\",\n        \"status\": 201,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"recipe_id\\\":2961067898}\"\n      }\n    ]\n  }\n}\n<<<END DETECTION>>>",
+    "exit_code": 2,
+    "dup_check": "Checked /tmp/found_bugs.jsonl and the Already Filed list. Only two entries exist: (1) the malformed-JSON-body 500 (UNCAUGHT_EXCEPTION/UNEXPECTED_5XX on any route) \u2014 unrelated class and root cause; (2) a DATA_INTEGRITY_VIOLATION race on POST /api/recipes/:id/like (duplicate like rows / ranking drift) \u2014 different route, different primary class, different root cause (concurrency race vs. content-type trust bug).\n\nMy finding's primary class is UNSAFE_CONTENT_TYPE, triggered by POST /api/recipes (recipe creation, in-scope per this run's focus area). Root cause: file_uploud.js's multer `fileFilter` only checks the client-supplied `mimetype` header (`file.mimetype.startsWith('image/')`), and `filename` derives the stored extension from the client-supplied `originalname` via `path.extname`. An attacker can upload an SVG (`image/svg+xml` passes the filter) which is later served via GET /data/recipes_pics/:filename with `Content-Type: image/svg+xml` \u2014 an actively-executable content type (script-capable, XSS-equivalent to serving attacker HTML) \u2014 inferred straight from the attacker-chosen file extension with no re-validation of actual content. No existing filed entry or found_bugs.jsonl entry covers this content-type/upload-trust root cause. Not a duplicate.",
+    "reason": {
+      "primary_class": "UNSAFE_CONTENT_TYPE",
+      "route": "POST /api/recipes"
+    }
+  },
+  "verdict": {
+    "passed": true,
+    "score": 0.9,
+    "criteria": {
+      "criterion_1": true,
+      "criterion_2": true,
+      "criterion_3": true,
+      "criterion_4": true,
+      "criterion_5": true
+    },
+    "evidence": "PoC logs in as seeded user alice and uploads a crafted `evil.svg` (containing an embedded `<script>alert(1)</script>`) as a recipe image via `POST /api/recipes` multipart with `content_type: image/svg+xml`. All 3/3 runs fired `UNSAFE_CONTENT_TYPE` as primary_class, with evidence showing the stored file served back at `/data/recipes_pics/<id>.svg` with `served_type: \"image/svg+xml\"` and `active_type: true`. Source review confirms multer's fileFilter permits any `image/*` mimetype unsanitized and `res.sendFile` serves it with an active, script-executing content type \u2014 a genuine stored-XSS-capable upload flaw, deterministically reproduced (score docked slightly only because the supplied \"reproduction command\" string pointed at a nonexistent filename, though the actual PoC file works perfectly)."
+  },
+  "find_transcript": "see find_transcript.jsonl (64 messages)",
+  "grade_transcript": "see grade_transcript.jsonl (40 messages)",
+  "timings": {
+    "find": 99.4832010269165,
+    "grade": 50.94525408744812
+  },
+  "error": null
+}

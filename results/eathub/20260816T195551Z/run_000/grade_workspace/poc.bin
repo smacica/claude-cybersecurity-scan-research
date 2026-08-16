@@ -1,0 +1,17 @@
+{
+  "detector": "DATA_INTEGRITY_VIOLATION",
+  "steps": [
+    { "session": "bob", "method": "POST", "path": "/api/login",
+       "body": { "email": "bob@seed.local", "password": "seed-pw-bob" } },
+    { "parallel": { "repeat": 5,
+        "requests": [ { "session": "bob", "method": "POST",
+                         "path": "/api/recipes/101/like",
+                         "body": { "like": 1 } } ] } }
+  ],
+  "invariants": [
+    { "sql": "SELECT COUNT(*) FROM likes WHERE recipe_id = 101 AND user_id = 2",
+       "expect": { "lte": 1 } },
+    { "sql": "SELECT ranking.likes - (SELECT COUNT(*) FROM likes WHERE likes.recipe_id = ranking.recipe_id AND likes.rating = 1) FROM ranking WHERE recipe_id = 101",
+       "expect": { "equals": 0 } }
+  ]
+}

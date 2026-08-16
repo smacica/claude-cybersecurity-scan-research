@@ -1,0 +1,8 @@
+{
+  "detector": "CROSS_ACCOUNT_ACCESS",
+  "steps": [
+    { "session": "alice", "method": "POST", "path": "/api/login",
+       "body": { "email": "alice@seed.local", "password": "seed-pw-alice" } },
+    { "session": "alice", "method": "DELETE", "path": "/api/comments/1" }
+  ]
+}

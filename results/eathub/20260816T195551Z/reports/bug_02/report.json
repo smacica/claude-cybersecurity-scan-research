@@ -1,0 +1,28 @@
+{
+  "signature": {
+    "primary_class": "CROSS_ACCOUNT_ACCESS",
+    "route": "DELETE /api/comments/:id"
+  },
+  "bug_id": 2,
+  "from_run": 1,
+  "status": "report_submitted",
+  "error": null,
+  "elapsed": 104.94902539253235,
+  "upstream_log": "(host-side upstream check not performed \u2014 run with --novelty to enable)",
+  "verdict": {
+    "section_scores": {
+      "precondition": 2,
+      "capability": 2,
+      "reachability": 2,
+      "blast_radius": 2,
+      "persistence": 2
+    },
+    "rubric_score": 10,
+    "escalation_bonus": 0,
+    "total_score": 0.7142857142857143,
+    "severity_rating": "NOT-A-BUG",
+    "novelty_status": "NOT_CHECKED",
+    "reachability_verdict": "REACHABLE"
+  },
+  "report": "<precondition>\nAttacker needs an authenticated session as *any* registered user (`isLoggedIn` middleware on `DELETE /api/comments/:comment_id`, `routes/recipe.js:238`) \u2014 no special relationship to the victim's comment is required in the sense the oracle implies, but a relationship to the *recipe* is required by the app's own logic. `dbDeleteComment` (`db.js:363-387`) authorizes the delete if `user_id` equals the comment's author (`row.user_id`) **or** the recipe's owner (`row.recipe_owner`, line 375). In the seeded fixture, comment 1 was posted by bob (user 2) on recipe 101, which is owned by alice (user 1); alice authenticates as herself and deletes bob's comment because she owns the recipe it was posted under. This is not a missing check \u2014 it is the documented authorization rule. README.md:349 states plainly: \"DELETE /api/comments/:comment_id \u2714 The comment's author **or the recipe's author**.\" I confirmed the boundary is correctly enforced for a genuinely unrelated party: when bob (neither the comment's author nor the recipe's owner) attempted to delete a comment alice posted on her own recipe, the app returned `403 {\"message\":\"that is not your comment\"}` (verified by variant replay, step 3 above) and logged `audit.deleteDenied` (`recipe.js:249`, `audit.js:21`).\n</precondition>\n\n<capability>\nTriggering this grants exactly the behavior EatHub advertises for recipe owners: moderation of comments left on their own recipes. It does **not** grant deletion of arbitrary comments site-wide \u2014 the SQL join in `dbDeleteComment` scopes `recipe_owner` to the specific recipe the target comment belongs to (`db.js:365-367`), so a user can only delete comments attached to recipes they themselves own. There is no primitive here beyond \"recipe author can remove any comment under their own recipe,\" which is a standard, intentional content-moderation feature (analogous to a blog author deleting comments on their own post, or a video owner removing comments on their own video).\n</capability>\n\n<reachability>\nREACHABLE (as a designed feature, not as a vulnerability) \u2014 `POST /api/login` then `DELETE /api/comments/:comment_id` with a valid session cookie is exactly how a real client would exercise the documented recipe-owner-moderation capability. Nothing here depends on an unconfigured integration or an artifact of the harness; the fixture just happens to set up bob's comment under alice's recipe, which is the normal, everyday shape of the data (anyone's recipe can receive anyone's comment). The behavior generalizes to any production deployment exactly as documented.\n</reachability>\n\n<blast_radius>\nBounded and self-limiting by design: a user can only delete comments on recipes *they* own \u2014 never another user's recipe's comments, and never another user's own comment on a third recipe. I verified the actual cross-account boundary (comment author X, recipe owner Y, unrelated deleter Z where Z \u2209 {X, Y}) is enforced with a 403. So the \"blast radius\" of the flagged behavior is: one recipe owner can delete comments left by any commenter, but only on recipes that owner controls \u2014 which is the intended moderation surface, not an escalation path to other users' recipes, likes, rankings, or accounts. Re-running with more comments/other recipe owners would only reproduce the same scoped, sanctioned behavior.\n</blast_radius>\n\n<persistence>\nThe deletion is durably written to SQLite (`DELETE FROM comments WHERE comment_id = ?`, `db.js:378`) and survives a process restart, same as any legitimate moderation action would. This is expected and desirable durability for a delete operation a recipe owner is authorized to perform \u2014 not evidence of corruption, since the action was within the owner's granted authority over their own recipe's comment thread.\n</persistence>\n\n<escalation_attempt>\nAttempted to find a case where the \"owner\" check could be tricked into applying to a recipe the attacker does not own (e.g., IDOR on `recipe_owner` resolution, or a comment whose `recipe_id` could be manipulated post-hoc) \u2014 `dbDeleteComment`'s join derives `recipe_owner` server-side from the comment's actual `recipe_id`, with no attacker-controlled input beyond `comment_id`, so there is no lever to widen scope. No viable escalation found within this route.\n</escalation_attempt>\n\n<novelty>NOT_CHECKED</novelty>\n\n<severity>NOT-A-BUG \u2014 The PoC exercises a documented, intentionally-scoped authorization rule (recipe owners may delete comments on their own recipes, README.md:349, db.js:362-387), and I independently verified the actual cross-account boundary (an unrelated user deleting a comment they neither authored nor own the parent recipe for) is correctly rejected with 403. The detector's \"actor != comment.user_id\" heuristic doesn't account for the app's legitimate parent-resource-owner override, producing a false positive rather than exploitable cross-account access.</severity>"
+}

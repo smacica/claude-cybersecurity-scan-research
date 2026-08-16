@@ -1,0 +1,36 @@
+{
+  "target": "eathub",
+  "status": "crash_found",
+  "crash": {
+    "poc_path": "/tmp/poc.json",
+    "poc_bytes": "ewogICJkZXRlY3RvciI6ICJEQVRBX0lOVEVHUklUWV9WSU9MQVRJT04iLAogICJzdGVwcyI6IFsKICAgIHsgInNlc3Npb24iOiAiYm9iIiwgIm1ldGhvZCI6ICJQT1NUIiwgInBhdGgiOiAiL2FwaS9sb2dpbiIsCiAgICAgICAiYm9keSI6IHsgImVtYWlsIjogImJvYkBzZWVkLmxvY2FsIiwgInBhc3N3b3JkIjogInNlZWQtcHctYm9iIiB9IH0sCiAgICB7ICJwYXJhbGxlbCI6IHsgInJlcGVhdCI6IDUsCiAgICAgICAgInJlcXVlc3RzIjogWyB7ICJzZXNzaW9uIjogImJvYiIsICJtZXRob2QiOiAiUE9TVCIsCiAgICAgICAgICAgICAgICAgICAgICAgICAicGF0aCI6ICIvYXBpL3JlY2lwZXMvMTAxL2xpa2UiLAogICAgICAgICAgICAgICAgICAgICAgICAgImJvZHkiOiB7ICJsaWtlIjogMSB9IH0gXSB9IH0KICBdLAogICJpbnZhcmlhbnRzIjogWwogICAgeyAic3FsIjogIlNFTEVDVCBDT1VOVCgqKSBGUk9NIGxpa2VzIFdIRVJFIHJlY2lwZV9pZCA9IDEwMSBBTkQgdXNlcl9pZCA9IDIiLAogICAgICAgImV4cGVjdCI6IHsgImx0ZSI6IDEgfSB9LAogICAgeyAic3FsIjogIlNFTEVDVCByYW5raW5nLmxpa2VzIC0gKFNFTEVDVCBDT1VOVCgqKSBGUk9NIGxpa2VzIFdIRVJFIGxpa2VzLnJlY2lwZV9pZCA9IHJhbmtpbmcucmVjaXBlX2lkIEFORCBsaWtlcy5yYXRpbmcgPSAxKSBGUk9NIHJhbmtpbmcgV0hFUkUgcmVjaXBlX2lkID0gMTAxIiwKICAgICAgICJleHBlY3QiOiB7ICJlcXVhbHMiOiAwIH0gfQogIF0KfQo=",
+    "reproduction_command": "/work/run_poc.js /tmp/poc.json",
+    "crash_type": "DATA_INTEGRITY_VIOLATION",
+    "crash_output": "<<<DETECTION>>>\n{\n  \"fired\": true,\n  \"primary_class\": \"DATA_INTEGRITY_VIOLATION\",\n  \"classes\": [\n    \"DATA_INTEGRITY_VIOLATION\"\n  ],\n  \"trigger_step_index\": 1,\n  \"evidence\": {\n    \"always_on\": {\n      \"duplicate_like_rows\": [\n        {\n          \"recipe_id\": 101,\n          \"user_id\": 2,\n          \"c\": 2\n        }\n      ],\n      \"ranking_drift\": [\n        {\n          \"recipe_id\": 101,\n          \"ranking_likes\": 1,\n          \"ranking_dislikes\": 0,\n          \"actual_likes\": 2,\n          \"actual_dislikes\": 0\n        }\n      ],\n      \"invariant_failures\": [\n        {\n          \"index\": 0,\n          \"sql\": \"SELECT COUNT(*) FROM likes WHERE recipe_id = 101 AND user_id = 2\",\n          \"expected\": \"lte 1\",\n          \"actual\": 2\n        },\n        {\n          \"index\": 1,\n          \"sql\": \"SELECT ranking.likes - (SELECT COUNT(*) FROM likes WHERE likes.recipe_id = ranking.recipe_id AND likes.rating = 1) FROM ranking WHERE recipe_id = 101\",\n          \"expected\": \"equals 0\",\n          \"actual\": -1\n        }\n      ]\n    },\n    \"declared\": {},\n    \"http\": [\n      {\n        \"step_index\": 0,\n        \"parallel\": false,\n        \"session\": \"bob\",\n        \"method\": \"POST\",\n        \"path\": \"/api/login\",\n        \"route\": \"/api/login\",\n        \"status\": 200,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"user_id\\\":2,\\\"username\\\":\\\"bob\\\",\\\"email\\\":\\\"bob@seed.local\\\",\\\"profile_pic\\\":null,\\\"bio\\\":\\\"Seed user bob.\\\",\\\"likes\\\":[]}\"\n      },\n      {\n        \"step_index\": 1,\n        \"parallel\": true,\n        \"session\": \"bob\",\n        \"method\": \"POST\",\n        \"path\": \"/api/recipes/101/like\",\n        \"route\": \"/api/recipes/:id/like\",\n        \"status\": 200,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"action\\\":\\\"add\\\"}\"\n      },\n      {\n        \"step_index\": 1,\n        \"parallel\": true,\n        \"session\": \"bob\",\n        \"method\": \"POST\",\n        \"path\": \"/api/recipes/101/like\",\n        \"route\": \"/api/recipes/:id/like\",\n        \"status\": 200,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"action\\\":\\\"add\\\"}\"\n      },\n      {\n        \"step_index\": 1,\n        \"parallel\": true,\n        \"session\": \"bob\",\n        \"method\": \"POST\",\n        \"path\": \"/api/recipes/101/like\",\n        \"route\": \"/api/recipes/:id/like\",\n        \"status\": 200,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"action\\\":\\\"add\\\"}\"\n      },\n      {\n        \"step_index\": 1,\n        \"parallel\": true,\n        \"session\": \"bob\",\n        \"method\": \"POST\",\n        \"path\": \"/api/recipes/101/like\",\n        \"route\": \"/api/recipes/:id/like\",\n        \"status\": 200,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"action\\\":\\\"cancel\\\"}\"\n      },\n      {\n        \"step_index\": 1,\n        \"parallel\": true,\n        \"session\": \"bob\",\n        \"method\": \"POST\",\n        \"path\": \"/api/recipes/101/like\",\n        \"route\": \"/api/recipes/:id/like\",\n        \"status\": 200,\n        \"error\": null,\n        \"body_excerpt\": \"{\\\"action\\\":\\\"cancel\\\"}\"\n      }\n    ]\n  }\n}\n<<<END DETECTION>>>",
+    "exit_code": 2,
+    "dup_check": "Compared against the Already Filed list (only the malformed-JSON-body 500 defect, unrelated route/root cause) and against /tmp/found_bugs.jsonl (only contains that same config-seeded entry). My finding's primary class is DATA_INTEGRITY_VIOLATION at POST /api/recipes/:recipe_id/like, caused by handlelike() in db.js doing an unguarded SELECT-then-INSERT/UPDATE across the likes and ranking tables with no transaction/locking \u2014 five concurrent like requests from the same user produce two rows in `likes` for the same (recipe_id, user_id) pair and leave `ranking.likes` (1) diverging from the true count of like rows (2). No entry in either list matches this route or root cause (the only filed bug is an unrelated malformed-JSON 500 in the generic error middleware). Reproduced 3/3 with the same primary class. Not a duplicate.",
+    "reason": {
+      "primary_class": "DATA_INTEGRITY_VIOLATION",
+      "route": "POST /api/recipes/:id/like"
+    }
+  },
+  "verdict": {
+    "passed": true,
+    "score": 0.94,
+    "criteria": {
+      "criterion_1": true,
+      "criterion_2": true,
+      "criterion_3": true,
+      "criterion_4": true,
+      "criterion_5": true
+    },
+    "evidence": "PoC logs in seed user bob and fires 5 concurrent `POST /api/recipes/101/like` requests. All 3 replay runs fired DATA_INTEGRITY_VIOLATION. Evidence varied slightly per run (sometimes duplicate `likes` rows for the same user, sometimes a negative `ranking.likes` counter) but the underlying invariant break \u2014 `ranking.likes` count disagreeing with actual like rows, and up to 2 like rows for one user \u2014 is consistent and traces directly to the unguarded check-then-act pattern in `handlelike()` in `/work/app/db.js`. This is a genuine, reproducible race-condition data-integrity bug, not a fixture/environment artifact."
+  },
+  "find_transcript": "see find_transcript.jsonl (37 messages)",
+  "grade_transcript": "see grade_transcript.jsonl (30 messages)",
+  "timings": {
+    "find": 52.068862199783325,
+    "grade": 37.66198134422302
+  },
+  "error": null
+}

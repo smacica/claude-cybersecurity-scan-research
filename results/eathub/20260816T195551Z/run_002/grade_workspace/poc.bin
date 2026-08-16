@@ -1,0 +1,14 @@
+{
+  "detector": "UNSAFE_CONTENT_TYPE",
+  "steps": [
+    { "session": "alice", "method": "POST", "path": "/api/login",
+      "body": { "email": "alice@seed.local", "password": "seed-pw-alice" } },
+    { "session": "alice", "method": "POST", "path": "/api/recipes",
+      "multipart": {
+        "fields": { "name": "Evil Recipe", "info": "x", "recipe": "[]", "ingredients": "[]" },
+        "files": [ { "field": "image", "filename": "evil.svg",
+                     "content_type": "image/svg+xml",
+                     "content_base64": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=" } ]
+      } }
+  ]
+}
