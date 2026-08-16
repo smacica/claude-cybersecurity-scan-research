@@ -25,7 +25,7 @@ from dataclasses import replace
 from . import docker_ops, sandbox
 from .agent import parse_xml_tag, run_agent
 from .artifacts import CrashArtifact, PatchVerdict
-from .asan import project_frames
+from .detection import fired_classes, trigger_route
 from .config import TargetConfig
 from .find import run_find
 from .prompts.patch_prompt import build_style_judge_prompt
@@ -163,7 +163,14 @@ async def grade_patch(
             t1 = _t1_passes(rc, out, err)
             if not t1:
                 evidence["t1"] = _clip(f"[poc] rc={rc}\n{err or out}")
-                return _verdict(t0, t1, t2, re_clean, t3, evidence, timings)
+                # rc=1 is the runner saying *it* broke, not that the PoC still
+                # fires. rc=3 (hang) is deliberately NOT a ladder error: either
+                # the original bug was a hang and the fix did not take, or the
+                # patch introduced one. Both are genuine patch failures, and
+                # labelling them infra would tell the agent to ignore a
+                # regression it just caused.
+                return _verdict(t0, t1, t2, re_clean, t3, evidence, timings,
+                                ladder_error=_LADDER_ERROR_T1 if rc == 1 else None)
 
             # ── T2: regression suite ─────────────────────────────────────────────
             if target.test_command:
@@ -242,15 +249,22 @@ async def grade_patch(
 
 
 def _t1_passes(rc: int, stdout: str, stderr: str) -> bool:
-    return rc == 0 and "AddressSanitizer:" not in (stdout + stderr)
+    # The runner's exit code already carries the whole signal: 0 = replay
+    # completed with no oracle firing, 2 = an oracle fired, 3 = hang, 1 = the
+    # harness itself broke. No string check on stdout — the obvious one
+    # (`'"fired": true' not in stdout`) matches only the pretty-printed form and
+    # would silently never fire against JSON.stringify's `{"fired":true}`.
+    return rc == 0
 
 
 def _focus_hint(crash: CrashArtifact, diff_source_root: str | None = None) -> str:
-    frames = project_frames(crash.crash_output, n=1)
-    where = f" near {frames[0]}" if frames else ""
+    classes = fired_classes(crash.crash_output, n=1)
+    what = classes[0] if classes else crash.crash_type
+    route = trigger_route(crash.crash_output)
+    where = f" at {route}" if route else ""
     hint = (
-        f"Re-attack the just-patched code path. The original crash was "
-        f"{crash.crash_type}{where}. Probe for a variant input that "
+        f"Re-attack the just-patched code path. The original finding was "
+        f"{what}{where}. Probe for a variant PoC that "
         f"reaches the same root cause despite the fix."
     )
     if diff_source_root:
@@ -294,7 +308,11 @@ async def _style_score(
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _verdict(t0, t1, t2, ra, t3, evidence, timings) -> PatchVerdict:
+_LADDER_ERROR_T1 = "t1 runner exited 1 (harness error, not a patch failure)"
+
+
+def _verdict(t0, t1, t2, ra, t3, evidence, timings,
+             ladder_error: str | None = None) -> PatchVerdict:
     return PatchVerdict(
         t0_builds=t0,
         t1_poc_stops=t1,
@@ -303,6 +321,7 @@ def _verdict(t0, t1, t2, ra, t3, evidence, timings) -> PatchVerdict:
         t3_style_score=t3,
         evidence=evidence,
         timings=timings,
+        ladder_error=ladder_error,
     )
 
 

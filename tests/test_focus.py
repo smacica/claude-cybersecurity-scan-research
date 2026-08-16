@@ -13,14 +13,14 @@ def test_no_focus_no_bugs_omits_sections():
     assert "## Already Filed" not in p
     # Baseline sections still present
     assert "## Setup" in p
-    assert "## Task" in p
+    assert "## Instructions" in p
 
 
 def test_focus_area_section_renders():
     p = build_find_prompt("url", "abc", "/src", "/bin",
-                          focus_area="PNG decoder (stbi__png_*)")
+                          focus_area="Vote counters (handlelike)")
     assert "## Focus Area" in p
-    assert "**PNG decoder (stbi__png_*)**" in p
+    assert "**Vote counters (handlelike)**" in p
     assert "## Already Filed" not in p
 
 
@@ -28,7 +28,7 @@ def test_reattack_harness_switches_template():
     default = build_find_prompt("url", "abc", "/src", "/bin", "ctr")
     harn = build_find_prompt("url", "abc", "/src", "/bin", "ctr",
                              reattack_harness="/tools/check.sh 60")
-    assert "Reproduction harness: `/tools/check.sh 60`" in harn
+    assert "Replay runner: `/tools/check.sh 60`" in harn
     assert "/poc/" in harn
     assert "/tools/check.sh" not in default
     # output contract identical
@@ -55,12 +55,12 @@ def test_known_bugs_section_renders():
 
 def test_both_sections_render_in_order():
     p = build_find_prompt("url", "abc", "/src", "/bin",
-                          focus_area="JPEG", known_bugs=["bug1"])
+                          focus_area="Vote counters", known_bugs=["bug1"])
     focus_pos = p.index("## Focus Area")
     bugs_pos = p.index("## Already Filed")
-    task_pos = p.index("## Task")
+    instr_pos = p.index("## Instructions")
     setup_pos = p.index("## Setup")
-    assert setup_pos < focus_pos < bugs_pos < task_pos
+    assert setup_pos < focus_pos < bugs_pos < instr_pos
 
 
 def test_empty_known_bugs_list_omits_section():
@@ -71,19 +71,19 @@ def test_empty_known_bugs_list_omits_section():
 def test_accept_dos_section_off_by_default():
     p = build_find_prompt("url", "abc", "/src", "/bin")
     assert "Benchmark mode" not in p
-    assert "allocation-size-too-big" not in p
+    assert "hang-class" not in p
 
 
 def test_accept_dos_section_renders_when_enabled():
     p = build_find_prompt("url", "abc", "/src", "/bin", accept_dos=True)
-    assert "## Benchmark mode — DoS-class crashes are in scope" in p
-    assert "allocation-size-too-big" in p
-    assert "allocator_may_return_null=1" in p
-    # Comes after the quality tiers — it overrides them
-    tiers_pos = p.index("## Crash Quality Tiers")
+    assert "## Benchmark mode — hang-class findings are in scope" in p
+    assert "HANG" in p
+    assert "exit 3" in p
+    # Comes after the out-of-scope list — it overrides the "not a hang" rule
+    scope_pos = p.index("## Out of scope")
     dos_pos = p.index("## Benchmark mode")
     output_pos = p.index("## Output Format")
-    assert tiers_pos < dos_pos < output_pos
+    assert scope_pos < dos_pos < output_pos
 
 
 # ── _assigned_focus round-robin ──────────────────────────────────────────────

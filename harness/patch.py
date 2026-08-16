@@ -175,7 +175,15 @@ def _failed_tier(v: PatchVerdict) -> tuple[str, str]:
     if not v.t0_builds:
         return "t0 (build)", v.evidence.get("t0", "")
     if not v.t1_poc_stops:
-        return "t1 (PoC still crashes)", v.evidence.get("t1", "")
+        if v.ladder_error:
+            # Tell the agent the harness broke rather than "your fix did not
+            # work" — most often its own change altered a response shape the
+            # PoC captures from.
+            return "t1 (harness error, not your patch)", (
+                v.ladder_error + "\n" + v.evidence.get("t1", ""))
+        if "rc=3" in v.evidence.get("t1", ""):
+            return "t1 (replay hung)", v.evidence.get("t1", "")
+        return "t1 (oracle still fires)", v.evidence.get("t1", "")
     if v.t2_tests_pass is False:
         return "t2 (tests regressed)", v.evidence.get("t2", "")
     if not v.re_attack_clean:

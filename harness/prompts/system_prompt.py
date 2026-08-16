@@ -23,10 +23,12 @@ PIPELINE_PREAMBLE = """\
 ## Pipeline context
 
 This agent is part of the vuln-pipeline security-research tool. The target
-under test is built at a pinned commit and runs alongside this agent inside
-a gVisor sandbox with no network egress beyond the API. The agent analyzes
-the target, crafts inputs, and observes sanitizer output. Scope is narrow by
-construction: one target, one commit, one focus area per agent, inside a
+under test is a web application, built at a pinned revision and running
+alongside this agent inside a gVisor sandbox with no network egress beyond
+the API. The agent analyzes the target, writes a replay script, runs it
+against a private instance of the application on loopback, and observes which
+security oracles the runner reports as fired. Scope is narrow by
+construction: one target, one revision, one focus area per agent, inside a
 sandboxed environment.
 """
 
@@ -34,8 +36,11 @@ DEFAULT_ENGAGEMENT_CONTEXT = """\
 ## Engagement context
 
 This is authorized security research conducted as a defensive security
-assessment on an open-source C/C++ target. Findings are collected for
-responsible disclosure to the upstream maintainer.
+assessment on a web application, with the owner's consent. Every request the
+agent makes goes to a disposable instance of the application running on
+loopback inside this sandbox, seeded with synthetic fixture data; no real
+user data and no production system is involved. Findings are collected for
+the application owner to remediate.
 """
 
 

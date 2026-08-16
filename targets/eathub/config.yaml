@@ -1,0 +1,50 @@
+# Copyright 2026 Anthropic PBC
+# SPDX-License-Identifier: Apache-2.0
+image_tag: vuln-pipeline-eathub:latest
+
+# Local, private target — no upstream. github_url / commit are required by the
+# loader but only rendered into prompts (a prose placeholder). NEVER run this
+# target with --novelty: novelty.py would hand the placeholder to `git clone`.
+# _check_novelty_supported in cli.py refuses it, but do not rely on that alone.
+github_url: "(local target — EatHub Express/SQLite recipe API)"
+commit: "n/a"
+
+# The replay runner, ONE level above source_root. It is a string interpolated
+# into agent prompts, never exec'd by the pipeline — the find/grade/report/patch
+# agents run it themselves, and it is executed programmatically only at patch T1.
+binary_path: /work/run_poc.js
+source_root: /work/app
+
+# T0 rebuild = offline syntax check of every tracked JS/.mjs. It must NOT run
+# `npm ci` (T0 has network=none and no npm cache). The `git rev-parse` guard is
+# load-bearing: without a repo, `git ls-files` exits 128, its output is empty,
+# and `xargs -r` on empty stdin exits 0 — so the check would pass having
+# verified nothing. The guard turns that silent pass into a loud rc=1. The image
+# ships /work/app as a git repo, so the guard passes there.
+build_command: >-
+  cd /work/app && git rev-parse --git-dir >/dev/null 2>&1
+  || { echo 'FATAL: /work/app is not a git repo (see targets/eathub/README.md)' >&2; exit 1; };
+  git ls-files -z --cached --others --exclude-standard '*.js' '*.mjs'
+  | xargs -0 -n1 -r node --check
+
+# node --test, 22/22 on a clean tree. The runner lives outside source_root, so
+# no_console.test.js never scans it.
+test_command: cd /work/app && npm test
+
+focus_areas:
+  - "Like/ranking integrity — handlelike() (db.js:140-201, route POST /api/recipes/:id/like) is check-then-act with no transaction and updates the ranking counter through a separate read-modify-write; concurrent votes duplicate rows and desync the counter"
+  - "handlelike error paths — a nonexistent recipe id reaches the INSERT and surfaces the FK rejection as a 500 rather than a 404 (db.js:186-196, route POST /api/recipes/:id/like)"
+  - "Request-controlled absolute URLs — baseUrl() builds verification links from the Host header (user.js:19, reached from POST /api/signup at user.js:53); with SMTP unset the link is printed to the console"
+  - "CORS and upload handling — reflected Origin with credentials (index.js:43-44); client-supplied mimetype and extension decide the stored filename and its served Content-Type (file_uploud.js, routes recipe.js POST /api/recipes and GET /data/recipes_pics/:filename)"
+
+attack_surface: |
+  Express 4 JSON API ("EatHub", recipe sharing) behind express-session with a
+  SQLite store colocated with application data, plus Passport local auth (login
+  is by email, not username). Routes live in routes/user.js and routes/recipe.js.
+  Google OAuth, SMTP, and Gemini are unconfigured and degrade to disabled, so the
+  reachable surface is local auth + recipe / comment / like CRUD + the image read
+  route. No outbound network. The runner boots a fresh, synthetically seeded
+  instance per replay; there is no real user data.
+
+known_bugs:
+  - "Malformed JSON body yields 500 instead of 400 — the index.js error middleware ignores err.status/err.statusCode from body-parser. Fires UNCAUGHT_EXCEPTION + UNEXPECTED_5XX on any route with one unauthenticated request. Known LOW defect; do not resubmit."

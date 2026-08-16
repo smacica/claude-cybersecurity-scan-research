@@ -44,13 +44,13 @@ from pathlib import Path
 from . import docker_ops, sandbox
 from .agent import color
 from .artifacts import CrashArtifact, RunResult
-from .asan import asan_excerpt, crash_reason, top_frame
+from .detection import detection_excerpt, detection_reason, trigger_route
 from .config import TargetConfig
 from .dedup import dedup
 from .find import run_find, DEFAULT_FIND_MAX_TURNS
 from .grade import run_grade
 from .judge import run_judge, run_compare
-from .novelty import upstream_log, crash_file_from_frame, NOVELTY_NOT_CHECKED
+from .novelty import upstream_log, NOVELTY_NOT_CHECKED
 from .patch import run_patch, PATCH_MAX_TURNS, DEFAULT_MAX_ITERATIONS
 from .recon import run_recon, RECON_MAX_TURNS
 from .report import run_report, REPORT_MAX_TURNS
@@ -192,11 +192,12 @@ def _write_result(out_dir: Path, result: RunResult) -> None:
     slim = result.to_dict()
     slim["find_transcript"] = f"see find_transcript.jsonl ({len(result.find_transcript)} messages)"
     slim["grade_transcript"] = f"see grade_transcript.jsonl ({len(result.grade_transcript)} messages)"
-    # Pipeline-parsed classification: deterministic crash_type / severity /
-    # operation. Sits alongside the agent-emitted crash_type so downstream
-    # consumers can cross-check (the agent tag is free-text and fragments).
+    # Pipeline-parsed classification: primary_class + trigger route read back
+    # out of the runner's own detection block. Sits alongside the agent-emitted
+    # crash_type so downstream consumers can cross-check (the agent tag is
+    # free-text and fragments).
     if result.crash:
-        slim["crash"]["reason"] = crash_reason(result.crash.crash_output)
+        slim["crash"]["reason"] = detection_reason(result.crash.crash_output)
     with open(out_dir / "result.json", "w") as f:
         json.dump(slim, f, indent=2)
 
@@ -393,13 +394,13 @@ async def _stream_dispatch(
     happens outside the lock (the slow part)."""
     reports_root: Path = ctx["reports_root"]
     reports_root.mkdir(parents=True, exist_ok=True)
-    excerpt = asan_excerpt(crash.crash_output)
+    excerpt = detection_excerpt(crash.crash_output)
 
     async with ctx["lock"]:
         manifest = _read_manifest(reports_root)
         print(color(f"[judge:{run_idx}] {len(manifest)} bug(s) in manifest ...", "judge"))
         jv, _jr, elapsed = await run_judge(
-            asan_excerpt=excerpt, dup_check=crash.dup_check,
+            detection_excerpt=excerpt, dup_check=crash.dup_check,
             grade_status=grade_status, grade_score=grade_score,
             poc_size=len(crash.poc_bytes),
             manifest_entries=manifest,
@@ -493,8 +494,10 @@ async def _stream_report(
         except (OSError, json.JSONDecodeError):
             old_report_text = None
 
-    frame = top_frame(crash.crash_output) or ""
-    crash_file = crash_file_from_frame(frame)
+    route = trigger_route(crash.crash_output) or ""
+    # novelty is refused for this target (config.yaml carries a placeholder
+    # github_url), so there is no crash file to key an upstream log on.
+    crash_file = None
     log = None
     if novelty:
         print(f"[report:{run_idx}→bug_{bug_id:02d}] novelty: fetching upstream log for {crash_file or '?'} ...")
@@ -530,7 +533,7 @@ async def _stream_report(
     print(color(_rline, "bold") if status == "report_submitted" else _rline)
 
     out = {
-        "signature": {"crash_type": crash.crash_type, "top_frame": frame},
+        "signature": {"primary_class": crash.crash_type, "route": route},
         "bug_id": bug_id, "from_run": run_idx, "status": status,
         "error": result.error, "elapsed": elapsed,
         "upstream_log": log if log else NOVELTY_NOT_CHECKED,
@@ -578,13 +581,12 @@ def _seed_found_bugs(path: Path, known_bugs: list[str]) -> None:
 
 
 def _append_found(path: Path, crash: CrashArtifact, run_idx: int) -> None:
-    # Raw ASAN excerpt — SUMMARY line + first stack frames. Agents parse the
-    # signature themselves; the pipeline doesn't pre-canonicalize crash_type or
-    # top_frame anymore (that was a fragility point — adjacent lines, format
-    # variance, free-text agent tags all fragmented the dedup).
+    # Compact detection excerpt — primary_class, the full fired set, the
+    # trigger route and one evidence sample. Agents compare semantically; the
+    # pipeline doesn't pre-canonicalize beyond what the runner already emitted.
     entry = {
         "run_idx": run_idx,
-        "asan_excerpt": asan_excerpt(crash.crash_output),
+        "detection_excerpt": detection_excerpt(crash.crash_output),
     }
     with open(path, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -602,8 +604,9 @@ def _read_found_summaries(path: Path) -> list[str]:
             d = json.loads(line)
         except json.JSONDecodeError:
             continue
-        # Config-seeded entries are prose; runtime entries carry ASAN excerpts.
-        out.append(d.get("asan_excerpt") or d.get("summary") or "")
+        # Config-seeded entries are prose; runtime entries carry detection
+        # excerpts.
+        out.append(d.get("detection_excerpt") or d.get("summary") or "")
     return [s for s in out if s]
 
 
@@ -646,7 +649,7 @@ def _append_manifest(reports_root: Path, bug_id: int, run_idx: int,
     reports_root.mkdir(parents=True, exist_ok=True)
     with open(reports_root / "manifest.jsonl", "a") as f:
         f.write(json.dumps({
-            "bug_id": bug_id, "run_idx": run_idx, "asan_excerpt": excerpt,
+            "bug_id": bug_id, "run_idx": run_idx, "detection_excerpt": excerpt,
         }) + "\n")
 
 
@@ -959,11 +962,31 @@ def main() -> int:
     return 1
 
 
+def _check_novelty_supported(target: TargetConfig, novelty: bool) -> None:
+    """Refuse --novelty on a target whose github_url is a placeholder.
+
+    novelty.py would hand that string to `git clone` as a URL. Targets without a
+    canonical upstream (local apps, vendored snapshots) declare it as prose, so
+    fail loudly at launch instead of emitting a confusing clone error per bug.
+    """
+    if not novelty:
+        return
+    url = (target.github_url or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")
+            or url.startswith("git@")):
+        raise SystemExit(
+            f"--novelty is not supported for target '{target.name}': its "
+            f"github_url is {target.github_url!r}, not a clonable URL. This "
+            f"target has no canonical upstream to diff against."
+        )
+
+
 def _cmd_run(args) -> int:
     # Resolve target
     try:
         target_dir = resolve_target_dir(args.target)
         target = TargetConfig.load(target_dir)
+        _check_novelty_supported(target, getattr(args, "novelty", False))
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -1034,6 +1057,7 @@ def _cmd_recon(args) -> int:
     try:
         target_dir = resolve_target_dir(args.target)
         target = TargetConfig.load(target_dir)
+        _check_novelty_supported(target, getattr(args, "novelty", False))
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -1131,21 +1155,21 @@ async def _report_one(
     agent_env: dict[str, str],
     reports_root: Path,
 ) -> dict:
-    crash_type, frame = sig
+    crash_type, route = sig
     out_dir = reports_root / f"bug_{idx:02d}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rep_path, _result, crash_dict = _pick_representative(entries)
     crash = CrashArtifact.from_dict(crash_dict)
 
-    crash_file = crash_file_from_frame(frame)
+    crash_file = None
     log = None
     if args.novelty:
         print(f"[report:{idx}] novelty: fetching upstream log for {crash_file or '?'} ...")
         log = upstream_log(target.github_url, target.commit,
                            crash_file or "", max_bytes=2000)
 
-    print(color(f"[report:{idx}] {crash_type} in {frame} "
+    print(color(f"[report:{idx}] {crash_type} at {route} "
                 f"(from {rep_path.parent.name}, {len(crash.poc_bytes)}B PoC) ...", "report"))
 
     try:
@@ -1162,7 +1186,7 @@ async def _report_one(
         )
     except Exception as e:
         traceback.print_exc()
-        out = {"signature": {"crash_type": crash_type, "top_frame": frame},
+        out = {"signature": {"primary_class": crash_type, "route": route},
                "from_run": str(rep_path), "status": "agent_failed",
                "error": f"{type(e).__name__}: {e}"}
         _write_report_json(out_dir, out)
@@ -1177,7 +1201,7 @@ async def _report_one(
     print(color(_rline, "bold") if status == "report_submitted" else _rline)
 
     out = {
-        "signature": {"crash_type": crash_type, "top_frame": frame},
+        "signature": {"primary_class": crash_type, "route": route},
         "from_run": str(rep_path),
         "runs_in_group": [str(p) for p, _s, _r in entries],
         "status": status,
@@ -1211,7 +1235,7 @@ def _load_report_checkpoint(out_dir: Path, sig: tuple[str, str]) -> dict | None:
     if d.get("status") != "report_submitted":
         return None
     s = d.get("signature", {})
-    if (s.get("crash_type"), s.get("top_frame")) != sig:
+    if (s.get("primary_class"), s.get("route")) != sig:
         return None
     return d
 
@@ -1254,6 +1278,7 @@ def _cmd_report(args) -> int:
     try:
         target_name = json.loads(first_path.read_text())["target"]
         target = TargetConfig.load(args.targets_dir / target_name)
+        _check_novelty_supported(target, getattr(args, "novelty", False))
     except Exception as e:
         print(f"error: could not load target config for batch: {e}", file=sys.stderr)
         return 1

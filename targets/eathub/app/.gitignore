@@ -1,0 +1,8 @@
+node_modules
+.env
+/data
+.idea
+.DS_Store
+# source artwork for the ai recipe photos - the compressed 4:3 versions that the
+# app actually serves live in ../frontend/public/ai_pics
+/ai_pics

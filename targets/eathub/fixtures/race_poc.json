@@ -1,0 +1,12 @@
+{
+  "_comment": "Known-firing flagship. handlelike() (db.js:140-201) is check-then-act with no transaction and updates ranking through a separate read-modify-write, so concurrent votes duplicate rows and desync the counter. repeat=5 is the measured floor: 2 fires 5/6, 3 lands on a self-consistent end state and fires 0/3, 5 fires 10/10, 10 fires 9/10, 20 crosses into the unresolved-promise hang and exits 3 about half the time. Exits 2.",
+  "detector": "DATA_INTEGRITY_VIOLATION",
+  "steps": [
+    { "session": "bob", "method": "POST", "path": "/api/login",
+      "body": { "email": "bob@seed.local", "password": "seed-pw-bob" } },
+    { "parallel": { "repeat": 5,
+        "requests": [ { "session": "bob", "method": "POST",
+                        "path": "/api/recipes/101/like",
+                        "body": { "like": 1 } } ] } }
+  ]
+}

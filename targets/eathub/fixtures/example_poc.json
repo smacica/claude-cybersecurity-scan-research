@@ -1,0 +1,37 @@
+{
+  "_comment": "The exhibit. Every construct the schema has, in one file: a hostile Host header, a stdout capture that spans a newline, a multipart upload, a captured server-side id, a parallel race, and a declared invariant the always-on set has no vocabulary for. Exits 2.",
+  "detector": "DATA_INTEGRITY_VIOLATION",
+  "steps": [
+    { "session": "carol2", "method": "POST", "path": "/api/signup",
+      "headers": { "Host": "attacker.test", "Origin": "https://attacker.test" },
+      "body": { "email": "carol2@seed.local", "password": "seed-pw-carol2",
+                "username": "carol2" },
+      "capture": { "link": { "from": "stdout",
+                             "regex": "verification link for [^\\n]*\\n(\\S+)" } } },
+
+    { "session": "alice", "method": "POST", "path": "/api/login",
+      "body": { "email": "alice@seed.local", "password": "seed-pw-alice" } },
+
+    { "session": "alice", "method": "POST", "path": "/api/recipes",
+      "multipart": {
+        "fields": { "name": "Alice's Race Soup", "info": "x", "recipe": "[]",
+                    "ingredients": "[]" },
+        "files": [{ "field": "image", "filename": "x.png",
+                    "content_type": "image/png",
+                    "content_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAACAAEA/f8D+gAAAABJRU5ErkJggg==" }]
+      },
+      "capture": { "recipe_id": { "from": "body", "path": "$.recipe_id" } } },
+
+    { "session": "bob", "method": "POST", "path": "/api/login",
+      "body": { "email": "bob@seed.local", "password": "seed-pw-bob" } },
+
+    { "parallel": { "repeat": 5,
+        "requests": [ { "session": "bob", "method": "POST",
+                        "path": "/api/recipes/${recipe_id}/like",
+                        "body": { "like": 1 } } ] } }
+  ],
+  "invariants": [
+    { "sql": "SELECT COUNT(*) FROM email_tokens WHERE user_id = 4",
+      "expect": { "equals": 1 } }
+  ]
+}

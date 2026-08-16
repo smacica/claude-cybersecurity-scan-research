@@ -6,7 +6,6 @@ import base64
 import json
 
 from harness.report import _parse_grader, _parse_score_tag, _parse_token
-from harness.novelty import crash_file_from_frame
 from harness.prompts.report_prompt import build_report_prompt
 from harness.cli import _pick_representative
 
@@ -14,14 +13,14 @@ from harness.cli import _pick_representative
 # ── grader tag parsing ───────────────────────────────────────────────────────
 
 def test_parse_score_tag_valid():
-    assert _parse_score_tag("<score_primitive>2</score_primitive>", "score_primitive", (0, 1, 2)) == 2
+    assert _parse_score_tag("<score_precondition>2</score_precondition>", "score_precondition", (0, 1, 2)) == 2
     assert _parse_score_tag("<escalation_bonus>4</escalation_bonus>", "escalation_bonus", (0, 1, 2, 4)) == 4
 
 
 def test_parse_score_tag_invalid_falls_back_to_zero():
-    assert _parse_score_tag("<score_primitive>5</score_primitive>", "score_primitive", (0, 1, 2)) == 0
-    assert _parse_score_tag("<score_primitive>none</score_primitive>", "score_primitive", (0, 1, 2)) == 0
-    assert _parse_score_tag("", "score_primitive", (0, 1, 2)) == 0
+    assert _parse_score_tag("<score_precondition>5</score_precondition>", "score_precondition", (0, 1, 2)) == 0
+    assert _parse_score_tag("<score_precondition>none</score_precondition>", "score_precondition", (0, 1, 2)) == 0
+    assert _parse_score_tag("", "score_precondition", (0, 1, 2)) == 0
 
 
 def test_parse_token():
@@ -34,28 +33,28 @@ def test_parse_token():
 
 
 GRADER_OUTPUT = """\
-<score_primitive>2</score_primitive>
-<score_reachability>2</score_reachability>
-<score_heap_layout>1</score_heap_layout>
-<score_escalation_path>2</score_escalation_path>
-<score_constraints>1</score_constraints>
+<score_precondition>2</score_precondition>
+<score_capability>2</score_capability>
+<score_reachability>1</score_reachability>
+<score_blast_radius>2</score_blast_radius>
+<score_persistence>1</score_persistence>
 <escalation_bonus>2</escalation_bonus>
-<severity>CRITICAL — WRITE primitive, reachable, pointer control demonstrated</severity>
-<reachability>REACHABLE — traced from RFCOMM socket through public API</reachability>
-<novelty>UNFIXED — no upstream commits touched the crashing file</novelty>
+<severity>HIGH — any authenticated user can desync another user's ranking counter</severity>
+<reachability>REACHABLE — POST /api/recipes/:id/like, any logged-in session</reachability>
+<novelty>NOT_CHECKED</novelty>
 """
 
 
 def test_parse_grader_full():
-    v = _parse_grader(GRADER_OUTPUT, novelty_checked=True)
+    v = _parse_grader(GRADER_OUTPUT, novelty_checked=False)
     assert v.section_scores == {
-        "primitive": 2, "reachability": 2, "heap_layout": 1,
-        "escalation_path": 2, "constraints": 1,
+        "precondition": 2, "capability": 2, "reachability": 1,
+        "blast_radius": 2, "persistence": 1,
     }
     assert v.rubric_score == 8
     assert v.escalation_bonus == 2
-    assert v.severity_rating == "CRITICAL"
-    assert v.novelty_status == "UNFIXED"
+    assert v.severity_rating == "HIGH"
+    assert v.novelty_status == "NOT_CHECKED"
     assert v.reachability_verdict == "REACHABLE"
     assert abs(v.total_score - 10/14) < 1e-6
 
@@ -73,23 +72,14 @@ def test_parse_grader_empty():
     assert v.reachability_verdict == "UNCLEAR"
 
 
-# ── crash_file_from_frame ────────────────────────────────────────────────────
-
-def test_crash_file_from_frame():
-    assert crash_file_from_frame("stbi__out_gif_code /work/stb_image.h:6668") == "/work/stb_image.h"
-    assert crash_file_from_frame("decode_chunk /src/a/b/decoder.c:4521") == "/src/a/b/decoder.c"
-    assert crash_file_from_frame("memcpy") is None
-    assert crash_file_from_frame("<no-frame>") is None
-
-
 # ── prompt building ──────────────────────────────────────────────────────────
 
 def _kwargs(**over):
     d = dict(
-        github_url="https://github.com/x/y", commit="abc123def456",
-        source_root="/work", binary_path="/work/entry",
-        reproduction_command="/work/entry /tmp/poc.bin",
-        crash_output="==1==ERROR: AddressSanitizer: heap-buffer-overflow\n",
+        github_url="(local target — EatHub)", commit="n/a",
+        source_root="/work/app", binary_path="/work/run_poc.js",
+        reproduction_command="/work/run_poc.js /tmp/poc.bin",
+        crash_output='<<<DETECTION>>>\n{"primary_class": "DATA_INTEGRITY_VIOLATION"}\n<<<END DETECTION>>>\n',
         attack_surface=None, upstream_log=None, crash_file=None,
     )
     d.update(over)
@@ -105,26 +95,26 @@ def test_build_prompt_novelty_off():
 
 def test_build_prompt_novelty_on():
     p = build_report_prompt(**_kwargs(
-        upstream_log="a1b2c3d Fix bounds in decode_chunk\n",
-        crash_file="/work/d.h",
+        upstream_log="a1b2c3d Fix the counter race\n",
+        crash_file="db.js",
     ))
-    assert "a1b2c3d Fix bounds" in p
+    assert "a1b2c3d Fix the counter race" in p
     assert "FIXED|UNFIXED|UNKNOWN" in p
     assert "NOT_CHECKED" not in p
 
 
 def test_build_prompt_attack_surface():
-    p = build_report_prompt(**_kwargs(attack_surface="Pure file parser — stbi_load."))
-    assert "Pure file parser — stbi_load." in p
+    p = build_report_prompt(**_kwargs(attack_surface="Express 4 JSON API behind express-session."))
+    assert "Express 4 JSON API behind express-session." in p
     assert "No target-specific" not in p
 
 
-def test_build_prompt_has_raw_asan_no_preparse():
-    # Report agent reads raw ASAN, not pipeline-preparsed crash_type/top_frame
+def test_build_prompt_has_raw_detection_no_preparse():
+    # Report agent reads the raw detection block, not a pipeline-preparsed class.
     p = build_report_prompt(**_kwargs())
     assert "Static severity" not in p
-    assert "Top frame" not in p
-    assert "classify the crash type" in p.lower()
+    assert "fired oracle classes" in p
+    assert "the pipeline does not pre-parse it for you" in p
 
 
 # ── representative picker ────────────────────────────────────────────────────
@@ -133,14 +123,14 @@ def _mk_result(tmp_path, name, status, score, poc_len):
     d = tmp_path / name
     d.mkdir()
     r = {
-        "target": "canary", "status": status,
+        "target": "eathub", "status": status,
         "crash": {
             "poc_path": "/tmp/poc.bin",
             "poc_bytes": base64.b64encode(b"A" * poc_len).decode("ascii"),
             "reproduction_command": "/work/entry /tmp/poc.bin",
-            "crash_type": "heap-buffer-overflow",
-            "crash_output": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n",
-            "exit_code": 134, "dup_check": "novel",
+            "crash_type": "DATA_INTEGRITY_VIOLATION",
+            "crash_output": '<<<DETECTION>>>\n{"primary_class": "DATA_INTEGRITY_VIOLATION"}\n<<<END DETECTION>>>\n',
+            "exit_code": 2, "dup_check": "novel",
         },
         "verdict": {"passed": status == "crash_found", "score": score,
                     "criteria": {}, "evidence": ""} if score else None,

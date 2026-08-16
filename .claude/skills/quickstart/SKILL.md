@@ -2,7 +2,7 @@
 name: quickstart
 description: >-
   The front door for this repo. With no argument: a 30-second
-  intro, then an offer to walk you through your first run on the canary
+  intro, then an offer to walk you through your first run on the EatHub app
   target. With a question: answers it from this repo's own docs and source,
   cites where it looked, and hands you the next command. Use for "how do
   I…", "why does…", "where is…", "can this…", or just "/quickstart" to get
@@ -44,7 +44,7 @@ Say roughly:
 > | Day 3-4 | Customize it for your stack               |
 > | Week 2  | Autonomous scanning, triage, and patching |
 >
-> Day-1 goal: threat-model, scan, and triage the bundled canary target.
+> Day-1 goal: threat-model, scan, and triage the bundled EatHub app.
 > Most teams get there before lunch.
 
 Remind them to `export CLAUDE_CODE_SUBAGENT_MODEL=<model-id>` so subagents
@@ -52,24 +52,24 @@ use the same model as the session.
 
 Then **AskUserQuestion** with three options:
 
-1. **Walk me through Day 1 on the canary (~10 min)** → run "Guided first
+1. **Walk me through Day 1 on the EatHub app (~10 min)** → run "Guided first
    run" below.
 2. **I have a question** → ask what it is, then switch to Help mode.
 3. **I'll read the README** → point at `README.md` Step 1 and stop.
 
 ### Guided first run
 
-Runs the three Step-1 skills on `targets/canary`, pausing after each to show
+Runs the three Step-1 skills on `targets/eathub/app`, pausing after each to show
 what landed on disk. These only read/write files in the repo; no sandbox
 needed.
 
-1. `/threat-model bootstrap targets/canary` via Task. When done, open
+1. `/threat-model bootstrap targets/eathub/app` via Task. When done, open
    `THREAT_MODEL.md`, show the focus areas, explain in 2-3 sentences how
    this steers the scan.
-2. `/vuln-scan targets/canary` via Task. When done, open
-   `targets/canary/VULN-FINDINGS.md`, summarize the count and top 2-3
+2. `/vuln-scan targets/eathub/app` via Task. When done, open
+   `targets/eathub/app/VULN-FINDINGS.md`, summarize the count and top 2-3
    findings, point at `VULN-FINDINGS.json`.
-3. `/triage targets/canary/VULN-FINDINGS.json` via Task. When done, open
+3. `/triage targets/eathub/app/VULN-FINDINGS.json` via Task. When done, open
    `TRIAGE.md`, explain what changed vs. raw findings (verified, deduped,
    re-ranked).
 

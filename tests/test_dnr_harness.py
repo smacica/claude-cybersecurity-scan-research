@@ -35,7 +35,7 @@ def test_dnr_config_loads_dnrcanary():
 
 def test_dnr_config_rejects_build_target():
     with pytest.raises(ValueError, match="not a detection & response"):
-        DnrTargetConfig.load(REPO / "targets" / "canary")
+        DnrTargetConfig.load(REPO / "targets" / "eathub")
 
 
 @pytest.mark.parametrize("key", ["logs_dir", "ground_truth", "grader"])
@@ -313,7 +313,7 @@ def test_cli_rejects_build_target(capsys):
     rc = main(
         [
             "run",
-            str(REPO / "targets" / "canary"),
+            str(REPO / "targets" / "eathub"),
             "--model",
             "m",
             "--dangerously-no-sandbox",

@@ -17,7 +17,8 @@ parallel vulnerability hunters.
 You are running inside an isolated sandbox with the target source. Explore directly.
 
 - Source root: {source_root}
-- Binary entry point: `{binary_path} <input_file>`
+- Replay runner: `{binary_path} <poc-file>` — boots the app on loopback,
+  replays a JSON PoC against it, and reports which oracles fired
 - Project: {github_url} @ {commit}
 
 ## Task
@@ -26,33 +27,37 @@ Identify 5–15 distinct subsystems that process untrusted input. Each will be
 assigned to one find-agent for a deep-dive. They need to be independent enough
 that N agents working in parallel won't converge on the same bugs.
 
-**Good partitions** — different parsers, different formats, different protocol
-stages. Example: PNG decoder vs JPEG decoder vs GIF decoder.
+**Good partitions** — different route groups, different trust transitions,
+different persistence paths. Example: session/auth handling vs upload storage
+vs the voting/counter path vs outbound link construction.
 
-**Bad partitions** — too narrow ("line 47"), too broad ("all of parsing"), or
-overlapping (two areas that funnel into the same code path).
+**Bad partitions** — too narrow ("line 47"), too broad ("all of routes"), or
+overlapping (two areas that funnel into the same handler).
 
 ## Exploration
 
-1. List the source tree: `find {source_root} -type f -name '*.c' -o -name '*.h' -o -name '*.cc' -o -name '*.cpp'`
-2. Read entry points and dispatch code — look for format magic-byte checks,
-   switch statements on input types, parser registration tables.
-3. For each subsystem: note the function-name prefix or file, and what
-   operations it performs (decompression, table lookups, length-prefixed
-   parsing, etc). These hints steer the find-agent toward likely bug patterns.
+1. List the source tree: `find {source_root} -type f \\( -name '*.js' -o -name '*.mjs' \\) -not -path '*/node_modules/*'`
+2. Read the route tables and the middleware chain — look for ownership checks,
+   session handling, anything that reads a request header into a stored or
+   emitted value, and any read-modify-write against the database.
+3. For each subsystem: note the route(s) and the function or file behind them,
+   and what it does (multi-statement database updates without a transaction,
+   request-controlled URL construction, file storage keyed on client-supplied
+   names, cross-user reads). These hints steer the find-agent toward likely
+   bug patterns.
 
 ## Output Format
 
 Emit a `<focus_areas>` tag with ONE area per line. Each line is handed
 verbatim to a find-agent as "concentrate here", so make it self-contained.
 
-Pattern: `<subsystem name> (<function/file pattern>) — <key operations>`
+Pattern: `<subsystem name> (<function/file:line>, route <path>) — <key operations>`
 
 Example:
 <focus_areas>
-Alpha parser (parse_alpha) — heap allocation with input-controlled copy length
-Bravo parser (parse_bravo) — fixed stack buffer, unbounded copy
-Charlie parser (parse_charlie) — conditional early-free with fall-through
+Vote counters (handlelike, db.js:140, route POST /api/recipes/:id/like) — check-then-act with no transaction, counter updated by read-modify-write
+Verification links (baseUrl, user.js:19, route POST /api/signup) — absolute URL built from a request header
+Upload storage (file_uploud.js, route POST /api/recipes) — client-supplied mimetype and extension decide the stored filename
 </focus_areas>
 
 Emit the tag once. Do not send further messages after.

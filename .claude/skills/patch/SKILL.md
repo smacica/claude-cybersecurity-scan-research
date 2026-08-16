@@ -586,12 +586,12 @@ Wrote ./PATCHES/bug_NN/, ./PATCHES.md, ./PATCHES.json
 
 ## Testing this skill
 
-Static mode against the canary fixture:
+Static mode against the bundled app:
 
 ```
-/vuln-scan targets/canary
-/triage VULN-FINDINGS.json --repo targets/canary --auto
-/patch TRIAGE.json --repo targets/canary --top 3
+/vuln-scan targets/eathub/app
+/triage VULN-FINDINGS.json --repo targets/eathub/app --auto
+/patch TRIAGE.json --repo targets/eathub/app --top 3
 ```
 
 Expected: three diffs under `PATCHES/bug_00..02/`, each
@@ -601,8 +601,8 @@ planted overflow/UAF/format-string bugs.
 Execution-verified mode against pipeline output:
 
 ```
-vuln-pipeline run drlibs --runs 3 --parallel --stream --model <m>
-/patch results/drlibs/<ts>/ --model <m>
+vuln-pipeline run eathub --runs 3 --parallel --stream --model <m>
+/patch results/eathub/<ts>/ --model <m>
 ```
 
 Expected: delegates to `vuln-pipeline patch`, surfaces

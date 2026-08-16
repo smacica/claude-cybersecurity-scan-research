@@ -32,16 +32,13 @@ you can review and upstream.
 The patch stage ships with the pipeline. No extra install is needed.
 
 Your target's `config.yaml` needs a `build_command` and optionally a 
-`test_command` for use in the verification ladder. All four targets included
-with this repo have `build_command`; only canary sets `test_command`, so
-the regress tier (T2) is skipped on the others.
+`test_command` for use in the verification ladder. The bundled `eathub` target
+sets both (`build_command` is an offline syntax check; `test_command` is
+`npm test`), so all four tiers run.
 
 ```bash
 # After a pipeline run has produced results/<target>/<ts>/
 bin/vp-sandboxed patch results/<target>/<ts>/ --model <model>
-
-# Or try it standalone on the pre-baked canary fixture (no pipeline run needed)
-bin/vp-sandboxed patch targets/canary/fixtures/results_sample --model <model>
 ```
 
 Output lands in `<results_dir>/reports/bug_NN/{patch.diff, patch_result.json}`
@@ -53,10 +50,10 @@ iteration.
 
 A patch agent runs in a sandboxed container (see 
 [agent-sandbox.md](agent-sandbox.md) for details) with the source, the
-proof of concept, the reproduction command, and the ASAN trace. Its prompt
-pushes it to fix the root cause rather than narrowly address the crash site,
-to look for sibling call sites with the same bug, and to keep the diff as 
-minimal as possible.
+proof of concept, the reproduction command, and the detection block from the
+original finding. Its prompt pushes it to fix the root cause rather than
+narrowly address the route the oracle observed, to look for sibling routes with
+the same pattern, and to keep the diff as minimal as possible.
 
 A grader agent then runs in a second container, created fresh from the same 
 image. The only thing that crosses over from the first container is the diff. 
@@ -69,9 +66,13 @@ exists only inside the grader's container — so the grader snapshots that
 container as a temporary image (`docker commit`) and launches the re-attack
 find-agent from the snapshot.
 
-If a tier fails, the evidence of the failure (e.g., compiler error, ASAN trace)
-goes into the next attempt's prompt, and the patch loop runs again, up to
-`--max-iterations` times.
+If a tier fails, the evidence of the failure (e.g., a syntax error, or the
+detection block showing the oracle still fires) goes into the next attempt's
+prompt, and the patch loop runs again, up to `--max-iterations` times. One
+distinction the ladder draws: if the runner exits 1 (a harness/infra error —
+often the patch changed a response shape the PoC captures from) rather than
+firing an oracle, that is fed back as a harness error, not "your fix didn't
+work", so the agent restores the shape instead of burning iterations.
 
 ## The verification ladder
 
@@ -83,13 +84,13 @@ based on model judgment.
 There is a fifth, optional step (enabled with `--style`) that uses a model to 
 review the patch's style, but it is only advisory.
 
-| Tier          | Question                             | Oracle                                                              | Field in `patch_result.json` |
-|---------------|--------------------------------------|---------------------------------------------------------------------|------------------------------|
-| **Build**     | Does the patched tree compile?       | `git apply` + `build_command` exit code                             | `t0_builds`                  |
-| **Reproduce** | Is the original crash gone?          | Exit 0 AND no `AddressSanitizer:` in output                         | `t1_poc_stops`               |
-| **Regress**   | Did it break existing behavior?      | `test_command` exit code (skipped if none)                          | `t2_tests_pass`              |
-| **Re-attack** | Root cause gone, or just this input? | A fresh 50-turn find-agent attacks the patched binary; ASAN decides | `re_attack_clean`            |
-| **Style**     | Would a maintainer accept it?        | LLM judge 0-10; **advisory only, never gates**                      | `t3_style_score`             |
+| Tier          | Question                             | Oracle                                                                   | Field in `patch_result.json` |
+|---------------|--------------------------------------|--------------------------------------------------------------------------|------------------------------|
+| **Build**     | Does the patched tree pass its build/syntax check? | `git apply` + `build_command` exit code                    | `t0_builds`                  |
+| **Reproduce** | Does the original finding stop firing? | The runner exits 0 (no oracle fires)                                   | `t1_poc_stops`               |
+| **Regress**   | Did it break existing behavior?      | `test_command` exit code (skipped if none)                               | `t2_tests_pass`              |
+| **Re-attack** | Root cause gone, or just this PoC?   | A fresh 50-turn find-agent attacks the patched app; the oracles decide   | `re_attack_clean`            |
+| **Style**     | Would a maintainer accept it?        | LLM judge 0-10; **advisory only, never gates**                           | `t3_style_score`             |
 
 A patch passes when build, reproduce, regress (or no suite), and re-attack are
 all clean.
@@ -154,7 +155,7 @@ For complex fixes, give the patch agent an explicit bailout: if the change
 touches more than N files, or the agent's own confidence is low, escalate to
 a human with the analysis instead of emitting a diff.
 
-> ⚠️ The patch agent's prompt reads target-derived data (the ASAN trace, the
+> ⚠️ The patch agent's prompt reads target-derived data (the detection block, the
 > exploitability report, and on retry the build / test output). The pipeline fences
 > those with per-call random delimiters and instructs the agent to treat them
 > as data, not instructions. But prompt-level fencing is a mitigation, not a
@@ -234,8 +235,8 @@ following workflow:
    migration plan: which pattern is unsafe, what the safe replacement is, 
    and where the call sites are.
 2. **Turn the plan into tests.** Write one test per call site that fails now
-   and passes once that call site is migrated. This suite plays the role ASAN
-   plays in the pipeline, i.e., the check that decides when you're done.
+   and passes once that call site is migrated. This suite plays the role the
+   oracle plays in the pipeline, i.e., the check that decides when you're done.
 3. **Split into tickets.** Group the tests into chunks that can be merged
    independently, each small enough to review.
 4. **Patch in parallel.** Spin up one worker subagent per ticket, in its own 

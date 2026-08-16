@@ -31,12 +31,19 @@ def _assistant(text: str) -> dict:
 
 def _crash() -> CrashArtifact:
     return CrashArtifact(
-        poc_path="/work/poc.bin",
-        poc_bytes=b"\x00" * 8,
-        reproduction_command="/work/entry poc.bin",
-        crash_type="heap-buffer-overflow",
-        crash_output="SUMMARY: AddressSanitizer: heap-buffer-overflow on x",
-        exit_code=1,
+        poc_path="/tmp/poc.bin",
+        poc_bytes=b'{"steps":[]}',
+        reproduction_command="node /work/run_poc.js /tmp/poc.bin",
+        crash_type="DATA_INTEGRITY_VIOLATION",
+        crash_output=(
+            '<<<DETECTION>>>\n'
+            '{"primary_class": "DATA_INTEGRITY_VIOLATION", '
+            '"classes": ["DATA_INTEGRITY_VIOLATION"], '
+            '"evidence": {"http": [{"step_index": 0, "method": "POST", '
+            '"path": "/api/recipes/101/like", "route": "/api/recipes/:id/like"}]}}\n'
+            '<<<END DETECTION>>>'
+        ),
+        exit_code=2,
         dup_check="distinct root cause",
     )
 
@@ -45,7 +52,7 @@ def _crash() -> CrashArtifact:
 
 
 def _run_vp(tmp_path, monkeypatch, crash, find_error):
-    target = TargetConfig.load(REPO / "targets" / "canary")
+    target = TargetConfig.load(REPO / "targets" / "eathub")
     find_result = AgentResult(messages=[_assistant("done")], error=find_error)
     graded: list[CrashArtifact] = []
 

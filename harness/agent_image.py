@@ -19,8 +19,19 @@ import textwrap
 
 from . import docker_ops
 
+# Node major baked into the base layer. The web-app target (targets/eathub)
+# does `require()` of an ESM module, which is only unflagged on Node >= 22.12 /
+# >= 20.19; Debian bookworm's own `nodejs` package is 18.19 and would throw
+# ERR_REQUIRE_ESM at app load. Only `/work` survives the per-target
+# `COPY --from`, so the runtime the prompts promise has to live in this base
+# layer — see ensure_base(). Bump BASE_SUFFIX (not just the Dockerfile) whenever
+# this changes: ensure_base() short-circuits on image_exists(BASE_TAG), so a
+# machine that already built an older base would otherwise keep serving it.
+NODE_MAJOR = "22"
+BASE_SUFFIX = "node22"
+
 CLAUDE_CODE_VERSION = "2.1.144"  # bump alongside the dev-env CLI pin
-BASE_TAG = f"vuln-pipeline-agent-base:{CLAUDE_CODE_VERSION}"
+BASE_TAG = f"vuln-pipeline-agent-base:{CLAUDE_CODE_VERSION}-{BASE_SUFFIX}"
 _TAG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/:-]*$")
 
 
@@ -57,11 +68,17 @@ def ensure_base() -> str:
     # Dockerfiles install them too, but ``ensure()`` only copies /work from the
     # target image — apt packages outside /work don't survive the COPY --from.
     # Anything the prompts promise has to live in this base layer.
+    # NodeSource ships a current Node major; Debian's own `nodejs` is 18.19,
+    # too old for `require()` of ESM (see NODE_MAJOR above). gcc + git stay in
+    # the base because gcc:14 derives from buildpack-deps — a web target's patch
+    # grader still needs git, and other targets still need the C toolchain.
     build(
         textwrap.dedent(f"""\
             FROM gcc:14
             RUN apt-get update && \\
-                apt-get install -y --no-install-recommends nodejs npm ca-certificates xxd gdb && \\
+                apt-get install -y --no-install-recommends ca-certificates curl xxd gdb && \\
+                curl -fsSL https://deb.nodesource.com/setup_{NODE_MAJOR}.x | bash - && \\
+                apt-get install -y --no-install-recommends nodejs && \\
                 rm -rf /var/lib/apt/lists/* && \\
                 npm install -g @anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}
             WORKDIR /work

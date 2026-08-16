@@ -973,8 +973,8 @@ Expected: f001 and f003 confirmed; f002 duplicate of f001; f004 dropped
 Or against pipeline output:
 
 ```
-vuln-pipeline run drlibs --runs 3 --parallel --stream
-/triage results/drlibs/<ts>/ --repo targets/drlibs
+vuln-pipeline run eathub --runs 3 --parallel --stream
+/triage results/eathub/<ts>/ --repo targets/eathub/app
 ```
 
 Hand-check a sample of TRUE_POSITIVE/HIGH results (the `first_links` should

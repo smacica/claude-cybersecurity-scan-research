@@ -23,7 +23,7 @@ _VALID_JUDGMENTS = ("NEW", "DUP_BETTER", "DUP_SKIP")
 
 
 async def run_judge(
-    asan_excerpt: str,
+    detection_excerpt: str,
     dup_check: str | None,
     grade_status: str,
     grade_score: float,
@@ -43,7 +43,7 @@ async def run_judge(
     judgment, defaults to NEW — fail open so crashes aren't silently dropped.
     """
     prompt = build_judge_prompt(
-        asan_excerpt=asan_excerpt,
+        detection_excerpt=detection_excerpt,
         dup_check=dup_check or "",
         grade_status=grade_status,
         grade_score=grade_score,

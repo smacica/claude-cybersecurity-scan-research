@@ -140,7 +140,7 @@ caps aren't enforced.
 
 ```bash
 export ANTHROPIC_API_KEY=...   # or CLAUDE_CODE_USE_BEDROCK=1 + AWS_* — see above
-bin/vp-sandboxed run drlibs --model <model-id> --runs 3 --parallel --stream
+bin/vp-sandboxed run eathub --model <model-id> --runs 3 --parallel --stream
 ```
 
 `bin/vp-sandboxed` is a small wrapper around the normal `vuln-pipeline`

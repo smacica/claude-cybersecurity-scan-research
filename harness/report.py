@@ -26,8 +26,8 @@ from .prompts.report_grader_prompt import build_report_grader_prompt
 REPORT_MAX_TURNS = 200
 GRADER_MAX_TURNS = 10
 
-_SECTIONS = ("primitive", "reachability", "heap_layout",
-             "escalation_path", "constraints")
+_SECTIONS = ("precondition", "capability", "reachability",
+             "blast_radius", "persistence")
 # Longest-first so UNFIXED doesn't match FIXED, NOT-A-BUG doesn't match LOW, etc.
 _SEVERITY_TOKENS = ("NOT-A-BUG", "NOT_STATED", "CRITICAL", "MEDIUM", "HIGH", "LOW")
 _REACH_TOKENS = ("HARNESS_ONLY", "REACHABLE", "UNCLEAR")
@@ -137,7 +137,7 @@ async def grade_report(
             transcript_path=transcript_path,
             tools=[],
         )
-    return _parse_grader(result.find_tagged_message("score_primitive"),
+    return _parse_grader(result.find_tagged_message("score_precondition"),
                          novelty_checked=novelty_checked)
 
 

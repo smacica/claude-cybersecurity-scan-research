@@ -60,6 +60,36 @@ def test_failed_tier_picks_first_failure():
     assert _failed_tier(v) == ("t0 (build)", "compile error")
 
 
+def test_failed_tier_t1_infra_error():
+    # rc=1 (runner broke) is surfaced as a harness error, not "your fix didn't
+    # work", so the patch agent restores the shape the PoC captures rather than
+    # burning iterations.
+    v = PatchVerdict(
+        t0_builds=True, t1_poc_stops=False, t2_tests_pass=None,
+        re_attack_clean=False, t3_style_score=None,
+        evidence={"t1": "runner error"}, timings={},
+        ladder_error="t1 runner exited 1 (harness error, not a patch failure)",
+    )
+    tier, ev = _failed_tier(v)
+    assert "harness error" in tier
+    assert "harness error" in ev
+
+
+def test_failed_tier_t1_hang():
+    # rc=3 (hang) carries rc=3 in the evidence and is a genuine patch failure.
+    v = PatchVerdict(
+        t0_builds=True, t1_poc_stops=False, t2_tests_pass=None,
+        re_attack_clean=False, t3_style_score=None,
+        evidence={"t1": "[poc] rc=3\ntimed out"}, timings={},
+    )
+    assert _failed_tier(v)[0] == "t1 (replay hung)"
+
+
+def test_failed_tier_t1_oracle_still_fires():
+    tier, _ = _failed_tier(FAIL_T1)
+    assert tier == "t1 (oracle still fires)"
+
+
 def test_run_patch_happy_path(tmp_path):
     with (
         patch("harness.patch.docker_ops") as mdocker,

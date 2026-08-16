@@ -12,7 +12,6 @@ When disabled (default), the prompt receives NOVELTY_NOT_CHECKED.
 """
 from __future__ import annotations
 
-import re
 import subprocess
 from pathlib import Path
 
@@ -85,11 +84,3 @@ def _ensure_clone(github_url: str, repo_dir: Path) -> tuple[bool, str]:
         return False, f"clone: {r.stderr.strip()[:200]}"
     return True, ""
 
-
-_FRAME_FILE = re.compile(r"(\S+):(\d+)$")
-
-
-def crash_file_from_frame(frame: str) -> str | None:
-    """Extract the file path from a top_frame string like `func /path/file.h:1234`."""
-    m = _FRAME_FILE.search(frame)
-    return m.group(1) if m else None

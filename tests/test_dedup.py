@@ -1,60 +1,65 @@
 # Copyright 2026 Anthropic PBC
 # SPDX-License-Identifier: Apache-2.0
-"""Post-hoc crash deduplication: signature extraction + results-tree grouping.
+"""Post-hoc dedup: signature extraction + results-tree grouping.
 
-Summary-only view now — the judge agent gates report dispatch in streaming
-mode; dedup just answers "these N crashes cluster into M signatures".
+Summary-only view — the judge agent gates report dispatch in streaming mode;
+dedup just answers "these N findings cluster into M signatures".
 """
 import json
 
-from harness.dedup import _signature, dedup, format_report, NO_FRAME
+from harness.dedup import _signature, dedup, format_report, NO_ROUTE
+
+
+def _block(primary, classes, trigger_step=1, http=None, always_on=None):
+    d = {
+        "fired": bool(classes),
+        "primary_class": primary,
+        "classes": classes,
+        "trigger_step_index": trigger_step,
+        "evidence": {"always_on": always_on or {}, "http": http or []},
+    }
+    return f"<<<DETECTION>>>\n{json.dumps(d)}\n<<<END DETECTION>>>"
+
+
+# Same root cause (the like race), two concrete recipe ids — must dedupe to one
+# signature because the route is templated.
+RACE_101 = _block(
+    "DATA_INTEGRITY_VIOLATION", ["DATA_INTEGRITY_VIOLATION"],
+    http=[{"step_index": 1, "method": "POST", "path": "/api/recipes/101/like",
+           "route": "/api/recipes/:id/like", "status": 200}])
+RACE_909 = _block(
+    "DATA_INTEGRITY_VIOLATION", ["DATA_INTEGRITY_VIOLATION"],
+    http=[{"step_index": 1, "method": "POST", "path": "/api/recipes/909/like",
+           "route": "/api/recipes/:id/like", "status": 200}])
+CORS = _block(
+    "CORS_POLICY_VIOLATION", ["CORS_POLICY_VIOLATION"], trigger_step=0,
+    http=[{"step_index": 0, "method": "OPTIONS", "path": "/api/profile",
+           "route": "/api/profile", "status": 204}])
+
+SIG_RACE = ("DATA_INTEGRITY_VIOLATION", "POST /api/recipes/:id/like")
+SIG_CORS = ("CORS_POLICY_VIOLATION", "OPTIONS /api/profile")
 
 
 # ── _signature ───────────────────────────────────────────────────────────────
 
-ASAN_TRACE_A = """\
-==1==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000110
-READ of size 4 at 0x602000000110 thread T0
-    #0 0x55a1b2c3d4e5 in decode_chunk /work/decoder.h:4521:9
-    #1 0x55a1b2c3d600 in decode_image /work/decoder.h:4890:12
-SUMMARY: AddressSanitizer: heap-buffer-overflow /work/decoder.h:4521 in decode_chunk
-"""
-
-ASAN_TRACE_B = """\
-==2==ERROR: AddressSanitizer: stack-buffer-overflow
-WRITE of size 17 at 0x7f58 thread T0
-    #0 0x7f2fc7a657ee in memcpy (/usr/local/lib64/libasan.so.8+0xf27ee)
-    #1 0x4013d9 in parse_bravo /work/entry.c:40
-SUMMARY: AddressSanitizer: stack-buffer-overflow in memcpy
-"""
-
-ASSERTION_OUTPUT = "entry: /work/decoder.h:4521: decode_chunk: Assertion `n >= 1 && n <= 4' failed.\n"
-
-
 def test_signature_basic():
-    crash = {"crash_type": "heap-buffer-overflow", "crash_output": ASAN_TRACE_A}
-    assert _signature(crash) == ("heap-buffer-overflow", "decode_chunk /work/decoder.h:4521")
+    crash = {"crash_type": "DATA_INTEGRITY_VIOLATION", "crash_output": RACE_101}
+    assert _signature(crash) == SIG_RACE
 
 
-def test_signature_skips_interceptor():
-    crash = {"crash_type": "stack-buffer-overflow", "crash_output": ASAN_TRACE_B}
-    assert _signature(crash) == ("stack-buffer-overflow", "parse_bravo /work/entry.c:40")
+def test_signature_route_template_collapses_ids():
+    a = {"crash_type": "DATA_INTEGRITY_VIOLATION", "crash_output": RACE_101}
+    b = {"crash_type": "DATA_INTEGRITY_VIOLATION", "crash_output": RACE_909}
+    assert _signature(a) == _signature(b)
 
 
-def test_signature_assertion():
-    # glibc assert() has no #N frames; same function as ASAN_TRACE_A, same dedup shape
-    crash = {"crash_type": "assertion-failure", "crash_output": ASSERTION_OUTPUT}
-    assert _signature(crash) == ("assertion-failure", "decode_chunk /work/decoder.h:4521")
-
-
-def test_signature_no_frame_fallback():
-    crash = {"crash_type": "SEGV", "crash_output": "<no parseable stack>"}
-    assert _signature(crash) == ("SEGV", NO_FRAME)
+def test_signature_no_route_fallback():
+    crash = {"crash_type": "HANG", "crash_output": "no block"}
+    assert _signature(crash) == ("HANG", NO_ROUTE)
 
 
 def test_signature_missing_fields():
-    assert _signature({}) == ("unknown", NO_FRAME)
-    assert _signature({"crash_type": None, "crash_output": None}) == ("unknown", NO_FRAME)
+    assert _signature({}) == ("unknown", NO_ROUTE)
 
 
 # ── dedup (results tree walk) ────────────────────────────────────────────────
@@ -66,103 +71,66 @@ def _write_result(path, status, crash_type=None, crash_output=None):
         crash = {
             "poc_path": "/tmp/poc.bin",
             "poc_bytes": "AAAA",
-            "reproduction_command": "/work/entry /tmp/poc.bin",
+            "reproduction_command": "/work/run_poc.js /tmp/poc.bin",
             "crash_type": crash_type,
             "crash_output": crash_output or "",
-            "exit_code": 134,
+            "exit_code": 2,
         }
     path.write_text(json.dumps({
-        "target": "synthetic", "status": status, "crash": crash,
+        "target": "eathub", "status": status, "crash": crash,
         "verdict": None, "timings": {}, "error": None,
         "find_transcript": "stub", "grade_transcript": "stub",
     }))
 
 
 def _build_tree(tmp_path):
-    """3 crashes on signature A, 1 on B, plus a no-crash and a rejected-on-A."""
-    root = tmp_path / "results" / "synthetic" / "20260101T000000Z"
-
-    # run_000, run_002: same bug, both passed
+    """3 findings on the race signature (one rejected), 1 CORS, plus a no-find."""
+    root = tmp_path / "results" / "eathub" / "20260101T000000Z"
     _write_result(root / "run_000" / "result.json", "crash_found",
-                  "heap-buffer-overflow", ASAN_TRACE_A)
+                  "DATA_INTEGRITY_VIOLATION", RACE_101)
     _write_result(root / "run_002" / "result.json", "crash_found",
-                  "heap-buffer-overflow", ASAN_TRACE_A)
-
-    # run_003: same bug, grader bounced it — still groups with the above
+                  "DATA_INTEGRITY_VIOLATION", RACE_909)  # different id, same sig
     _write_result(root / "run_003" / "result.json", "crash_rejected",
-                  "heap-buffer-overflow", ASAN_TRACE_A)
-
-    # run_001: different bug
+                  "DATA_INTEGRITY_VIOLATION", RACE_101)
     _write_result(root / "run_001" / "result.json", "crash_found",
-                  "stack-buffer-overflow", ASAN_TRACE_B)
-
-    # run_004: no crash — should be skipped
+                  "CORS_POLICY_VIOLATION", CORS)
     _write_result(root / "run_004" / "result.json", "no_crash_found")
-
     return root
 
 
 def test_dedup_groups_duplicates(tmp_path):
-    root = _build_tree(tmp_path)
-    groups = dedup(root)
-
-    sig_a = ("heap-buffer-overflow", "decode_chunk /work/decoder.h:4521")
-    sig_b = ("stack-buffer-overflow", "parse_bravo /work/entry.c:40")
-
-    assert set(groups.keys()) == {sig_a, sig_b}
-    assert len(groups[sig_a]) == 3
-    assert len(groups[sig_b]) == 1
+    groups = dedup(_build_tree(tmp_path))
+    assert set(groups.keys()) == {SIG_RACE, SIG_CORS}
+    assert len(groups[SIG_RACE]) == 3
+    assert len(groups[SIG_CORS]) == 1
 
 
 def test_dedup_includes_rejected(tmp_path):
-    root = _build_tree(tmp_path)
-    groups = dedup(root)
-
-    sig_a = ("heap-buffer-overflow", "decode_chunk /work/decoder.h:4521")
-    statuses = {status for _, status, _ in groups[sig_a]}
+    groups = dedup(_build_tree(tmp_path))
+    statuses = {status for _, status, _ in groups[SIG_RACE]}
     assert statuses == {"crash_found", "crash_rejected"}
 
 
-def test_dedup_parses_operation(tmp_path):
-    root = _build_tree(tmp_path)
-    groups = dedup(root)
-
-    sig_a = ("heap-buffer-overflow", "decode_chunk /work/decoder.h:4521")
-    sig_b = ("stack-buffer-overflow", "parse_bravo /work/entry.c:40")
-
-    ops_a = {r["operation"] for _, _, r in groups[sig_a]}
-    ops_b = {r["operation"] for _, _, r in groups[sig_b]}
-    assert ops_a == {"READ"}
-    assert ops_b == {"WRITE"}
-
-
-def test_dedup_signature_prefers_parsed_type(tmp_path):
-    # Agent wrote free-text "overflow!!" but SUMMARY line says heap-buffer-overflow.
+def test_dedup_signature_prefers_parsed_class(tmp_path):
     root = tmp_path / "batch"
     _write_result(root / "run_000" / "result.json", "crash_found",
-                  "overflow!!", ASAN_TRACE_A)
+                  "free-text-nonsense", RACE_101)
     groups = dedup(root)
-    # Signature key uses the pipeline-parsed type, not the agent tag.
-    assert ("heap-buffer-overflow", "decode_chunk /work/decoder.h:4521") in groups
+    assert SIG_RACE in groups
 
 
 def test_dedup_skips_null_crash(tmp_path):
-    root = _build_tree(tmp_path)
-    groups = dedup(root)
-
-    # 5 result.json files, but only 4 have a crash
+    groups = dedup(_build_tree(tmp_path))
     total = sum(len(v) for v in groups.values())
     assert total == 4
 
 
 def test_dedup_walks_nested_batches(tmp_path):
-    # Two timestamp dirs, each with a single-run layout (no run_NNN subdir)
-    target_root = tmp_path / "results" / "synthetic"
+    target_root = tmp_path / "results" / "eathub"
     _write_result(target_root / "20260101T000000Z" / "result.json", "crash_found",
-                  "heap-buffer-overflow", ASAN_TRACE_A)
+                  "DATA_INTEGRITY_VIOLATION", RACE_101)
     _write_result(target_root / "20260102T000000Z" / "result.json", "crash_found",
-                  "heap-buffer-overflow", ASAN_TRACE_A)
-
+                  "DATA_INTEGRITY_VIOLATION", RACE_909)
     groups = dedup(target_root)
     assert len(groups) == 1
     (_, entries), = groups.items()
@@ -172,12 +140,10 @@ def test_dedup_walks_nested_batches(tmp_path):
 def test_dedup_skips_malformed_json(tmp_path):
     root = tmp_path / "batch"
     _write_result(root / "run_000" / "result.json", "crash_found",
-                  "heap-buffer-overflow", ASAN_TRACE_A)
+                  "DATA_INTEGRITY_VIOLATION", RACE_101)
     (root / "run_001").mkdir(parents=True)
     (root / "run_001" / "result.json").write_text("{ not valid json")
-
     groups = dedup(root)
-    # good run survives; bad one silently skipped
     assert sum(len(v) for v in groups.values()) == 1
 
 
@@ -188,33 +154,26 @@ def test_dedup_empty_dir(tmp_path):
 # ── format_report ────────────────────────────────────────────────────────────
 
 def test_format_report_sorted_by_count(tmp_path):
-    root = _build_tree(tmp_path)
-    groups = dedup(root)
-    report = format_report(groups, root)
-
-    # A (3 crashes) sorts before B (1 crash) — larger group first.
-    pos_a = report.index("heap-buffer-overflow")
-    pos_b = report.index("stack-buffer-overflow")
-    assert pos_a < pos_b
-
+    report = format_report(dedup(_build_tree(tmp_path)), _build_tree(tmp_path))
+    pos_race = report.index("DATA_INTEGRITY_VIOLATION")
+    pos_cors = report.index("CORS_POLICY_VIOLATION")
+    assert pos_race < pos_cors
     assert "[3x]" in report
     assert "[1x]" in report
     assert "2 unique signature(s) across 4 crash(es)" in report
 
 
-def test_format_report_shows_operation(tmp_path):
-    root = _build_tree(tmp_path)
-    report = format_report(dedup(root), root)
-    assert "stack-buffer-overflow (WRITE)" in report
-    assert "heap-buffer-overflow (READ)" in report
+def test_format_report_shows_route(tmp_path):
+    report = format_report(dedup(_build_tree(tmp_path)), _build_tree(tmp_path))
+    assert "at POST /api/recipes/:id/like" in report
+    assert "at OPTIONS /api/profile" in report
 
 
 def test_format_report_shows_relative_paths(tmp_path):
     root = _build_tree(tmp_path)
     report = format_report(dedup(root), root)
-
     assert "run_000/result.json" in report
-    assert str(tmp_path) not in report  # absolute prefix stripped
+    assert str(tmp_path) not in report
 
 
 def test_format_report_shows_status(tmp_path):

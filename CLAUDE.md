@@ -14,21 +14,29 @@ This repo has two halves:
   pipeline to another stack). Route the user to these for scoping, static
   review, Q&A, and post-run triage. (`/verify` is contributor tooling for
   validating harness changes on docker-less hosts, not part of the user flow.)
-- **`vuln-pipeline`** (`harness/`) — the autonomous pipeline. Docker + ASAN,
-  executes target code, needs a sandbox (see `docs/security.md`). Route here
-  when the user wants to actually find and verify crashes.
+- **`vuln-pipeline`** (`harness/`) — the autonomous pipeline. Docker, executes
+  target code, needs a sandbox (see `docs/security.md`). Route here when the
+  user wants to actually find and verify security-property violations.
 
-Docs for each topic are in `docs/`; targets are in `targets/` (canary is the
-fast smoke test). The rest of this file is the pipeline operator guide.
+Docs for each topic are in `docs/`; targets are in `targets/` (eathub is the
+worked web-app target and fast smoke test). The rest of this file is the
+pipeline operator guide.
 
 ---
 
 # vuln-pipeline
 
-Execution-verified vulnerability discovery for C/C++ targets. A find-agent reads
-source, crafts inputs, runs an ASAN-instrumented binary until it lands a 3/3
-reproducing crash. A grade-agent in a fresh container verifies it. Output is a
-crashing input file, not prose.
+Execution-verified vulnerability discovery for web-application targets. A
+find-agent reads source, writes a JSON replay PoC, and runs it through a runner
+that boots the app on loopback and reports which security oracles fired, until
+it lands a 3/3 reproducing finding. A grade-agent in a fresh container verifies
+it. Output is a replay PoC + detection block, not prose.
+
+The pipeline was originally a C/C++ + AddressSanitizer demo; it was ported to
+web targets via `/customize`. The shape is unchanged — an agent crafts an
+input, a detector fires in a sandbox, a second agent verifies — only the
+detector (ASAN → the `run_poc.js` oracle set), the PoC (a crashing file → a
+JSON replay script), and the target (a C binary → an Express app) differ.
 
 ## When the user asks you to run it
 
@@ -169,23 +177,21 @@ safe to upstream.** Surface `patch.diff` for human review and point at
 `docs/patching.md#reviewing-generated-patches` for what to look for. Don't
 offer to apply the diff to anything outside the pipeline containers.
 
-For a quick demo without a prior find run, point at the canary fixture:
-`vuln-pipeline patch targets/canary/fixtures/results_sample --model <m>`.
-
 **`--accept-dos` (off by default)** lowers the find-agent's submission floor
-for benchmark/validation runs. The default quality bar rules out DoS-class
-crashes (`allocation-size-too-big`, stack exhaustion from unbounded
-recursion) — agents triage them with `allocator_may_return_null=1` and keep
-hunting for memory corruption. Right behavior for real vuln hunting, but it
-means DoS-class CVEs (e.g. wild-malloc via untrusted-size-field overflow)
+for benchmark/validation runs. The default quality bar rules out hang-class
+findings — an agent that trips the `HANG` oracle (a request or the whole
+replay blowing its time budget, e.g. the like race at a high `repeat`
+crossing into an unresolved-promise hang) keeps hunting for a memory-safety-
+equivalent integrity violation instead. Right behavior for real hunting, but it
 land in transcripts without a formal submission. With `--accept-dos`, agents
-submit the DoS find instead of skipping it. Use for known-CVE demo targets
-where the CVE classification is DoS — check the CVE before launching.
+submit the hang find instead of skipping it. Use when the finding you want to
+demonstrate is itself a hang — check before launching.
 
 **`--engagement-context <file>`** overrides the authorization block in the
 agent system prompt. The pipeline ships a default "authorized security
-research / defensive security assessment" block that's sufficient for most
-open-source targets. If the user has an org-specific engagement scope
+research / defensive security assessment" block; eathub ships a target-specific
+one at `targets/eathub/engagement_context.md` (private web app, owner consent,
+synthetic fixture data). If the user has an org-specific engagement scope
 (authorized-by, in-scope subsystems, disclosure path), point this flag at a
 file containing that block. Threaded to every agent's system prompt (find,
 recon, report, grade, judge).
@@ -195,22 +201,24 @@ recon, report, grade, judge).
 Two layers, both agent-judged:
 
 **Runtime (`<dup_check>`):** find-agents must emit a `<dup_check>` tag
-alongside `<poc_path>` with their reasoning for why the crash is distinct from
+alongside `<poc_path>` with their reasoning for why the finding is distinct from
 what's already in `found_bugs.jsonl`. The pipeline rejects submissions without
 it. The agent makes the judgment (it knows root cause); the pipeline enforces
-that the judgment happened. Entries in the jsonl are raw ASAN excerpts
-(SUMMARY line + top frames) — agents compare semantically, not by string
-match.
+that the judgment happened. Entries in the jsonl are detection excerpts
+(primary class, fired set, trigger route, one evidence sample) — agents compare
+semantically, not by string match.
 
-**Report-gate (`--stream` only):** a judge agent reads each graded crash
+**Report-gate (`--stream` only):** a judge agent reads each graded finding
 against the `reports/manifest.jsonl` and decides NEW / DUP_BETTER / DUP_SKIP.
-Replaces regex signature-match as the gate — same root cause at different
-lines/frames still dedupes. DUP_BETTER triggers a re-report; a compare agent
-then picks the canonical one and writes `canonical.json`.
+Replaces regex signature-match as the gate — same root cause at a different
+route or with a different adjacent class still dedupes. DUP_BETTER triggers a
+re-report; a compare agent then picks the canonical one and writes
+`canonical.json`.
 
-**Writing `known_bugs` entries:** key on function name, not line number. The
-same bug crashes at adjacent lines or with different ASAN types depending on
-input. See `targets/README.md`.
+**Writing `known_bugs` entries:** key on the primary oracle class and the
+route/root cause, not the exact evidence. The same bug can fire adjacent
+classes or land at a neighbouring route depending on the PoC. See
+`targets/README.md`.
 
 ## Architecture (what's load-bearing)
 
@@ -248,22 +256,33 @@ it accept `--permission-mode bypassPermissions`. Don't remove either.
 `--allowedTools` is a permission allowlist; `--tools` actually restricts the
 available set.
 
-**Canary parsers need `__attribute__((noinline))`.** At `-O1` they inline into
-`main`, which changes the ASAN signature. If adding a canary parser, mark it.
+**The agent base pins Node 22 (`agent_image.py`).** Only `/work` survives the
+per-target `COPY --from`, so the runtime the prompts promise lives in the base
+layer. The eathub app does `require()` of an ESM module, unflagged only on Node
+≥22.12. `BASE_TAG` carries `BASE_SUFFIX` — bump it (not just the Dockerfile)
+when the Node major changes, or `ensure_base()`'s `image_exists` short-circuit
+serves a stale base. `agent_image.py` is shared with `dnr_harness/`.
+
+**The runner lives one level above `source_root`** (`/work/run_poc.js`, source
+at `/work/app`). Load-bearing: a patch agent's `git diff` is scoped to
+`source_root`, so it structurally cannot modify its own verifier, and the
+runner sits outside `app/test/no_console.test.js`'s scanned tree.
 
 **Model is a runtime arg, not config.** Always `--model` flag or
 `VULN_PIPELINE_MODEL` env. `TargetConfig` has no model field by design.
 
 ## Adding a target
 
-Directory under `targets/` with a Dockerfile (ASAN build) + `config.yaml`. No
-pipeline code changes. See `targets/README.md`.
+Directory under `targets/` with a Dockerfile + `config.yaml`. No pipeline code
+changes. See `targets/README.md`.
 
-**Shipped targets:** `canary` is the fast-iteration smoke test (~6min, 3
-planted bugs). `drlibs`, `alsa`, and `htslib` are real-world CVE demo
-targets — pinned to vulnerable commits, with per-target READMEs documenting
-the CVEs and expected find times. htslib is the harder of the set (CRAM
-container format, 10-CVE cluster).
+**Shipped targets:** `eathub` is the worked web-app target and fast-iteration
+smoke test — a private Express/SQLite recipe API (vendored under
+`targets/eathub/app/`) with a `run_poc.js` replay runner and nine security
+oracles. Its flagship finding is a check-then-act race in the like/ranking
+counter; `targets/eathub/README.md` documents the oracle set and the honest
+coverage table against the triaged findings. (The pipeline was ported from a
+C/C++ + ASAN demo via `/customize`; the C targets were removed in that port.)
 
 ## Detection & response track
 
@@ -291,8 +310,10 @@ spoilers — never mount or read them on the hunt side. See
 ## Tests
 
 `pytest tests/`. Unit coverage spans tag/XML parsing, artifact serialization,
-ASAN signature extraction, focus-area rendering, dedup signatures,
-`found_bugs.jsonl` handling, the judge and compare agents, report parsing, the
-T0–T3 patch-grade ladder, the `/threat-model` and `/triage` skill checkpoint
-files, and system-prompt construction. No integration tests — canary is the
-fast integration path (`--runs 3 --parallel --max-turns 50`).
+detection-block parsing (`test_detection.py`), focus-area rendering, dedup
+signatures, `found_bugs.jsonl` handling, the judge and compare agents, report
+parsing, the T0–T3 patch-grade ladder, the `/threat-model` and `/triage` skill
+checkpoint files, and system-prompt construction. `test_patch_grade_e2e.py`
+drives the real-Docker ladder against eathub with hand-crafted diffs
+(skipped without a working runtime). No LLM-in-the-loop integration tests —
+eathub is the fast integration path (`--runs 3 --parallel --max-turns 100`).

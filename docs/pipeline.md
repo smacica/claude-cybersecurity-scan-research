@@ -22,7 +22,7 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 export ANTHROPIC_API_KEY=sk-ant-...   # or CLAUDE_CODE_OAUTH_TOKEN, or Bedrock — see docs/agent-sandbox.md
 
 # Run the recon → find → verify → report loop
-bin/vp-sandboxed run drlibs --model <model-id> --runs 3 --parallel --stream --auto-focus
+bin/vp-sandboxed run eathub --model <model-id> --runs 3 --parallel --stream --auto-focus
 # Generate a candidate patch for each finding
 bin/vp-sandboxed patch results/drlibs/<timestamp>/ --model <model-id>
 ```

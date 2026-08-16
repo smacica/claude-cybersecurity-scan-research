@@ -22,9 +22,8 @@ review what it produces, see [docs/patching.md](../../../docs/patching.md).
   the skill shells out to `vuln-pipeline patch`. The target's `config.yaml`
   needs a `build_command` (the in-container rebuild step after applying a
   diff) and optionally a `test_command` (the regression suite for the
-  regress tier). All four shipped C/C++ targets have `build_command`;
-  only canary sets `test_command` — on the others the regress tier is
-  skipped.
+  regress tier). The bundled `eathub` target sets both, so all four ladder
+  tiers run.
 
 ## Usage
 
@@ -53,9 +52,6 @@ between (it ships with the pipeline; no extra install):
 ```bash
 # After a find run has produced results/<target>/<ts>/:
 bin/vp-sandboxed patch results/<target>/<ts>/ --model <m>
-
-# Or try it standalone on the pre-baked canary fixture (no find run needed):
-bin/vp-sandboxed patch targets/canary/fixtures/results_sample --model <m>
 ```
 
 Full flag reference (`--bug`, `--parallel`, `--no-reattack`, `--style`,

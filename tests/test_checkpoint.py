@@ -114,13 +114,13 @@ def test_resume_layout_guard(tmp_path, n_subdirs, top_result, runs, want_err):
 
 # ── report (skip-on-exists) ──────────────────────────────────────────────────
 
-_SIG = ("heap-buffer-overflow", "parse_kv")
+_SIG = ("DATA_INTEGRITY_VIOLATION", "POST /api/recipes/:id/like")
 
 
 def test_report_checkpoint_submitted(tmp_path):
     _write(tmp_path / "report.json",
            {"status": "report_submitted",
-            "signature": {"crash_type": _SIG[0], "top_frame": _SIG[1]},
+            "signature": {"primary_class": _SIG[0], "route": _SIG[1]},
             "verdict": {"rubric_score": 8}})
     d = _load_report_checkpoint(tmp_path, _SIG)
     assert d is not None and d["verdict"]["rubric_score"] == 8
@@ -130,7 +130,7 @@ def test_report_checkpoint_signature_mismatch(tmp_path):
     # bug_NN index drifted; checkpoint is for a different bug → re-report.
     _write(tmp_path / "report.json",
            {"status": "report_submitted",
-            "signature": {"crash_type": "use-after-free", "top_frame": "other"}})
+            "signature": {"primary_class": "ORIGIN_ESCAPE", "route": "POST /api/signup"}})
     assert _load_report_checkpoint(tmp_path, _SIG) is None
 
 
@@ -139,6 +139,6 @@ def test_report_checkpoint_retries_failed_and_missing(tmp_path):
         d = tmp_path / status
         _write(d / "report.json",
                {"status": status,
-                "signature": {"crash_type": _SIG[0], "top_frame": _SIG[1]}})
+                "signature": {"primary_class": _SIG[0], "route": _SIG[1]}})
         assert _load_report_checkpoint(d, _SIG) is None
     assert _load_report_checkpoint(tmp_path / "absent", _SIG) is None

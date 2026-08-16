@@ -73,6 +73,12 @@ class PatchVerdict:
     t3_style_score: float | None   # 0-10, None when style judge not run
     evidence: dict[str, str]       # per-tier stdout/stderr excerpts
     timings: dict[str, float]
+    # Set when a tier could not be evaluated because the *harness* broke rather
+    # than the patch failing — the runner's exit 1 (malformed PoC, reset failed,
+    # app never came up, a capture the patch invalidated). Without this a patch
+    # that legitimately changes a response shape breaks the PoC's capture and
+    # the agent spends all five iterations being told its fix did not work.
+    ladder_error: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -98,6 +104,7 @@ class PatchVerdict:
             t3_style_score=d.get("t3_style_score"),
             evidence=d.get("evidence", {}),
             timings=d.get("timings", {}),
+            ladder_error=d.get("ladder_error"),
         )
 
 

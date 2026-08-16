@@ -104,12 +104,12 @@ def test_report_prompt_wraps_asan_in_nonce_block():
 
 def test_judge_prompt_wraps_asan_in_nonce_blocks():
     entries = [
-        {"bug_id": 0, "run_idx": 3, "asan_excerpt": BREAKOUT, "report_text": None},
-        {"bug_id": 1, "run_idx": 7, "asan_excerpt": BREAKOUT,
-         "report_text": "<primitive>Confirmed WRITE.</primitive>"},
+        {"bug_id": 0, "run_idx": 3, "detection_excerpt": BREAKOUT, "report_text": None},
+        {"bug_id": 1, "run_idx": 7, "detection_excerpt": BREAKOUT,
+         "report_text": "<capability>Confirmed cross-user write.</capability>"},
     ]
     p = build_judge_prompt(
-        asan_excerpt=BREAKOUT, dup_check="novel\n" + BREAKOUT,
+        detection_excerpt=BREAKOUT, dup_check="novel\n" + BREAKOUT,
         grade_status="crash_found", grade_score=1.0, poc_size=47,
         manifest_entries=entries,
     )
@@ -120,7 +120,7 @@ def test_judge_prompt_wraps_asan_in_nonce_blocks():
     assert p.count(f'<untrusted_data id="{nonce}">') == p.count(
         f'</untrusted_data id="{nonce}">'
     )
-    assert "Confirmed WRITE" in p
+    assert "Confirmed cross-user write" in p
 
 
 def test_find_prompt_wraps_known_bugs_in_nonce_block():
@@ -194,7 +194,7 @@ def test_style_judge_prompt_wraps_diff_in_nonce_block():
 def test_judge_prompt_nonce_differs_per_call():
     def build():
         return build_judge_prompt(
-            asan_excerpt=BREAKOUT, dup_check="novel",
+            detection_excerpt=BREAKOUT, dup_check="novel",
             grade_status="crash_found", grade_score=1.0, poc_size=47,
             manifest_entries=[],
         )

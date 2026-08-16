@@ -3,7 +3,7 @@
 """Patch grader: T0-T3 ladder, PatchVerdict semantics, short-circuit ordering.
 
 docker_ops + find.run_find are mocked; e2e against real Docker lives in
-tests/test_patch_grade_e2e.py (canary only).
+tests/test_patch_grade_e2e.py (eathub only).
 """
 
 from __future__ import annotations
@@ -19,31 +19,34 @@ from harness.patch_grade import _t1_passes, grade_patch
 # ── fixtures ─────────────────────────────────────────────────────────────────
 
 CANARY = TargetConfig(
-    name="canary",
-    dockerfile_dir="targets/canary",
-    image_tag="vuln-pipeline-canary:latest",
+    name="eathub",
+    dockerfile_dir="targets/eathub",
+    image_tag="vuln-pipeline-eathub:latest",
     github_url="(local)",
     commit="n/a",
-    binary_path="/work/entry",
-    source_root="/work",
-    build_command="gcc -O1 -g -fsanitize=address -fno-omit-frame-pointer "
-    "-o /work/entry /work/entry.c",
+    binary_path="/work/run_poc.js",
+    source_root="/work/app",
+    build_command="cd /work/app && git ls-files -z '*.js' | xargs -0 -n1 -r node --check",
     test_command=None,
 )
 
 ALPHA_CRASH = CrashArtifact(
     poc_path="/tmp/poc.bin",
-    poc_bytes=b"A\x40" + b"A" * 64,
-    reproduction_command="/work/entry /tmp/poc.bin",
-    crash_type="heap-buffer-overflow",
-    crash_output="==1==ERROR: AddressSanitizer: heap-buffer-overflow\n"
-    "    #0 0x7f in memcpy\n"
-    "    #1 0x40 in parse_alpha /work/entry.c:25\n"
-    "SUMMARY: AddressSanitizer: heap-buffer-overflow in memcpy\n",
-    exit_code=134,
+    poc_bytes=b'{"steps":[]}',
+    reproduction_command="node /work/run_poc.js /tmp/poc.bin",
+    crash_type="DATA_INTEGRITY_VIOLATION",
+    crash_output=(
+        "<<<DETECTION>>>\n"
+        '{"primary_class": "DATA_INTEGRITY_VIOLATION", '
+        '"classes": ["DATA_INTEGRITY_VIOLATION"], '
+        '"evidence": {"http": [{"step_index": 0, "method": "POST", '
+        '"path": "/api/recipes/101/like", "route": "/api/recipes/:id/like"}]}}\n'
+        "<<<END DETECTION>>>\n"
+    ),
+    exit_code=2,
 )
 
-DIFF = b"--- a/entry.c\n+++ b/entry.c\n@@ -1 +1 @@\n-x\n+y\n"
+DIFF = b"--- a/db.js\n+++ b/db.js\n@@ -1 +1 @@\n-x\n+y\n"
 
 
 # ── PatchVerdict semantics ───────────────────────────────────────────────────
@@ -131,19 +134,24 @@ def test_verdict_roundtrip():
 
 
 def test_t1_passes_clean_exit():
-    assert _t1_passes(0, "alpha: first=65\n", "")
+    # rc 0 = replay ran, no oracle fired = the fix worked. The detection block
+    # in stdout is not consulted — the exit code carries the whole signal.
+    assert _t1_passes(0, "<<<DETECTION>>>\n{\"fired\": false}\n<<<END DETECTION>>>\n", "")
 
 
-def test_t1_fails_on_asan_in_stderr():
-    assert not _t1_passes(0, "", "==1==ERROR: AddressSanitizer: heap-buffer-overflow\n")
+def test_t1_fails_when_oracle_still_fires():
+    # rc 2 = an oracle fired = the PoC still reproduces.
+    assert not _t1_passes(2, "<<<DETECTION>>>\n{\"fired\": true}\n<<<END DETECTION>>>\n", "")
 
 
-def test_t1_fails_on_asan_in_stdout():
-    assert not _t1_passes(0, "SUMMARY: AddressSanitizer: SEGV\n", "")
+def test_t1_fails_on_hang():
+    # rc 3 = hang. Not a pass; patch.py labels it "t1 (replay hung)".
+    assert not _t1_passes(3, "", "timed out")
 
 
-def test_t1_fails_on_nonzero_exit():
-    assert not _t1_passes(1, "", "")
+def test_t1_fails_on_runner_error():
+    # rc 1 = runner/infra error. Not a pass; patch.py routes it via ladder_error.
+    assert not _t1_passes(1, "", "runner error: malformed PoC")
 
 
 # ── ladder short-circuit (mocked docker) ─────────────────────────────────────
@@ -236,7 +244,7 @@ def test_t1_fail_short_circuits(mock_docker):
         [
             (0, "", ""),  # apply
             (0, "", ""),  # build
-            (134, "", "AddressSanitizer: heap-buffer-overflow"),  # PoC still crashes
+            (2, '<<<DETECTION>>>\n{"fired": true}\n<<<END DETECTION>>>\n', ""),  # oracle still fires
         ]
     )
     v = asyncio.run(
@@ -245,6 +253,41 @@ def test_t1_fail_short_circuits(mock_docker):
     assert v.t0_builds
     assert not v.t1_poc_stops
     assert not v.passed
+
+
+def test_t1_runner_error_sets_ladder_error(mock_docker):
+    # rc=1 from the runner means the harness broke (e.g. the patch changed a
+    # response shape the PoC captures from), not that the PoC still fires.
+    mock_docker.exec_sh.side_effect = _exec_sequence(
+        [
+            (0, "", ""),  # apply
+            (0, "", ""),  # build
+            (1, "", "runner error: unresolved capture ${recipe_id}"),  # T1 infra error
+        ]
+    )
+    v = asyncio.run(
+        grade_patch(CANARY, ALPHA_CRASH, DIFF, model="m", run_reattack=False)
+    )
+    assert not v.t1_poc_stops
+    assert v.ladder_error is not None
+    assert "harness error" in v.ladder_error
+
+
+def test_t1_hang_is_not_a_ladder_error(mock_docker):
+    # rc=3 (hang) is a genuine patch failure (introduced or unfixed hang), not
+    # infra — so ladder_error stays None.
+    mock_docker.exec_sh.side_effect = _exec_sequence(
+        [
+            (0, "", ""),  # apply
+            (0, "", ""),  # build
+            (3, '<<<DETECTION>>>\n{"primary_class": "HANG"}\n<<<END DETECTION>>>\n', ""),
+        ]
+    )
+    v = asyncio.run(
+        grade_patch(CANARY, ALPHA_CRASH, DIFF, model="m", run_reattack=False)
+    )
+    assert not v.t1_poc_stops
+    assert v.ladder_error is None
 
 
 def test_t2_runs_when_configured(mock_docker):

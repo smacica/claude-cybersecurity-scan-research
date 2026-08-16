@@ -1,0 +1,11 @@
+# The image installs node_modules from the lockfile itself (npm ci). A vendored
+# node_modules in the build context would be copied over the freshly built one
+# with a possibly-mismatched ABI, so keep it out.
+app/node_modules
+# Mutable runtime state — the app recreates data/ on boot; a copied-in db would
+# land in the baseline commit and make `git diff` dirty after a replay.
+app/data
+app/.git
+app/.env
+app/ai_pics
+**/.DS_Store

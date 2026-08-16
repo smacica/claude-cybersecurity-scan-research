@@ -1,0 +1,25 @@
+diff --git a/db.js b/db.js
+index c3646fb..24ded76 100644
+--- a/db.js
++++ b/db.js
+@@ -137,8 +137,9 @@ let db = new sqlite3.Database(dbPath, (err) => {
+     }
+ })
+ 
++let likeQueue = Promise.resolve()
+ function handlelike(recipe_id, user_id, likeStatement){
+-    return new Promise((resolve, reject) => {
++    const run = () => new Promise((resolve, reject) => {
+         let rankComlumn = []
+         if(likeStatement == 1){
+             rankComlumn = ['likes','dislikes']
+@@ -198,6 +199,9 @@ function handlelike(recipe_id, user_id, likeStatement){
+             }
+         })
+     })
++    const result = likeQueue.then(run, run)
++    likeQueue = result.catch(() => {})
++    return result
+ }
+ 
+ async function getRecipes(data){

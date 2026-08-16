@@ -1,0 +1,15 @@
+{
+  "_comment": "Negative control. Exercises the SPA shell, an anonymous read, a login and an authenticated read against the unmodified app. MUST exit 0 with no class fired. Proves the SPA stub survived the per-replay copy and that the UNEXPECTED_5XX reqId correlation discriminates rather than just silencing.",
+  "detector": "NONE",
+  "steps": [
+    { "method": "GET", "path": "/" },
+    { "method": "GET", "path": "/api/recipes" },
+    { "method": "GET", "path": "/api/recipes/101" },
+    { "session": "alice", "method": "POST", "path": "/api/login",
+      "body": { "email": "alice@seed.local", "password": "seed-pw-alice" } },
+    { "session": "alice", "method": "GET", "path": "/api/profile" },
+    { "session": "alice", "method": "POST", "path": "/api/recipes/102/like",
+      "body": { "like": 1 } },
+    { "session": "alice", "method": "POST", "path": "/api/logout" }
+  ]
+}
