@@ -94,8 +94,16 @@ Three skills, run in sequence, re-runnable as the codebase changes:
 | [`/triage`](.claude/skills/triage/) | 3 independent subagents per finding vote real/false-positive, then dedupe + re-rank by exploitability | [`TRIAGE.md`](TRIAGE.md) |
 | `/patch` | Generates candidate fixes | *(not run this pass)* |
 
-- **Run:** interactive, two ~5-hour Claude Pro sessions. Token-heavy — three
-  verifier subagents per finding plus a ranking pass.
+- **Run:** interactive, two ~5-hour Claude Pro sessions (the second one's limit
+  is what killed two verifier agents mid-run, below).
+- **Token cost:** no usage data was recorded, so this is an estimate from the
+  fan-out — **low single-digit millions of tokens**, dominated by triage:
+  - the app is ~2.3k LOC (~30k tokens for a full read of the tree)
+  - `/vuln-scan` runs one review subagent per focus area, each reading its
+    slice plus `THREAT_MODEL.md`
+  - `/triage` is the expensive half: 13 findings × 3 independent verifiers =
+    **39 subagent runs**, each re-reading the relevant source to vote, plus a
+    dedupe and re-rank pass over the whole set
 - **Raw:** [`VULN-FINDINGS.md`](VULN-FINDINGS.md) — 13 findings (4 HIGH /
   5 MEDIUM / 4 LOW, several under 0.4 confidence).
 - **Triaged:** [`TRIAGE.md`](TRIAGE.md) — 0 duplicates, 6 false positives,
