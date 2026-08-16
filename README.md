@@ -9,7 +9,7 @@ Express/SQLite recipe-sharing API (vendored in this repo at
 | | Scope | Method | Verification | Found | Results |
 |---|---|---|---|---|---|
 | **`/security-review`** | Diff only (`main` → branch) | Single-pass LLM read + independent FP filter | None — reasoning only | **1 MEDIUM** (2 more raised, then self-rejected) | [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) |
-| **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only | **2 HIGH / 4 MEDIUM / 1 LOW** (from 13 raw: 4H/5M/4L) — [2 more it couldn't verify](#what-neither-approach-could-verify) | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) → [`TRIAGE.md`](TRIAGE.md) |
+| **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only | **2 HIGH / 4 MEDIUM / 1 LOW** (from 13 raw: 4H/5M/4L) — [2 more it couldn't verify](#open-findings-that-neither-scan-could-settle) | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) → [`TRIAGE.md`](TRIAGE.md) |
 | **Reference pipeline** (`vuln-pipeline`, this repo) | HTTP-reachable attack surface only | Agent writes a PoC, replays it against a live sandboxed instance | Execution — a detector oracle actually has to fire, twice, in two separate containers | **1 HIGH / 1 MEDIUM** (3 crashes submitted, 1 killed on review) | [`REFERENCE-PIPELINE.md`](REFERENCE-PIPELINE.md) |
 
 The short version:
@@ -131,7 +131,7 @@ Three skills, run in sequence, re-runnable as the codebase changes:
   5 MEDIUM / 4 LOW, several under 0.4 confidence).
 - **Triaged:** [`TRIAGE.md`](TRIAGE.md) — 0 duplicates, 6 false positives,
   7 acted-on (**2 HIGH / 4 MEDIUM / 1 LOW**). Two of the seven are flagged
-  `needs_manual_test` — see [below](#what-neither-approach-could-verify).
+  `needs_manual_test` — see [below](#open-findings-that-neither-scan-could-settle).
 
 **The two HIGH findings that survived triage:**
 
@@ -228,7 +228,7 @@ whether the violated invariant was ever an invariant.
 - `targets/eathub/README.md`'s coverage table puts the pipeline's honest reach
   at **3 of the 7** triaged true positives (upload content-type confusion,
   CORS credential reflection, Host-header verification links). The other four
-  are itemised [below](#what-neither-approach-could-verify).
+  are itemised [below](#open-findings-that-neither-scan-could-settle).
 - The flagship finding — the check-then-act race in the like/ranking counter
   (`db.js:140-201`, `bug_00` above) — **isn't in the static triage list at
   all.** It was only found because the pipeline can fire concurrent requests
@@ -237,11 +237,18 @@ whether the violated invariant was ever an invariant.
 
 ---
 
-## What neither approach could verify
+## Open findings that neither scan could settle
 
-Every finding that is still an open question — nothing below has been proven
-real *or* disproven. Listed so it doesn't quietly disappear between the two
-result files.
+Not a pipeline-only list: every row below is a **join of the static scan and
+the pipeline**, which is why it sits outside both. Two findings (f001, f004)
+the static scan established as true positives and the pipeline simply can't
+reach; one (f013) the static scan failed to vote on and the pipeline then
+measured into irrelevance; one (f005) both cover, and neither can close.
+Collected here so nothing quietly disappears between the two result files.
+
+(`/security-review` isn't in scope for this table — it only ever saw one
+branch's diff. What it structurally cannot find is listed in
+[§1](#what-this-scan-cannot-find).)
 
 | Finding | Sev | Static verdict | Why the pipeline can't settle it | What it needs |
 |---|---|---|---|---|
