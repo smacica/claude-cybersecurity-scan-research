@@ -19,17 +19,6 @@ dist/
 .patch-state/
 .dnr-hunt-state/
 .dnr-respond-state/
-VULN-FINDINGS.md
-VULN-FINDINGS.json
-TRIAGE.md
-TRIAGE.json
-PATCHES/
-PATCHES.md
-PATCHES.json
-INCIDENTS.json
-INCIDENT_REPORT.md
-RESPONSE.md
-RESPONSE-*.md
 
 # ...but DO track the checked-in example outputs (captured skill runs that
 # ship with the repo). Negation must follow the patterns above.
