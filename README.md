@@ -1,354 +1,226 @@
-# Defending Code Reference Harness
+# Comparing Claude's security-scanning approaches on EatHub
 
-A reference implementation for autonomous vulnerability discovery and
-remediation with Claude, based on our learnings from [partnering with security
-teams at several organizations](https://www.anthropic.com/glasswing)
-since launching Claude Mythos Preview. For a write up of these learnings along with
-best practices, see the [accompanying blog post](https://claude.com/blog/using-llms-to-secure-source-code)
-(also available in [`blog-post.md`](docs/blog-post.md)). For a lightweight SDK-only 
-walkthrough of the same recon → find → triage → report → patch loop, see the 
-[companion cookbook](https://platform.claude.com/cookbook/claude-agent-sdk-06-the-vulnerability-detection-agent).
+Three different ways of pointing Claude at the same codebase, run against the
+same target app: **[EatHub](https://github.com/smacica/Eathub)**, an
+Express/SQLite recipe-sharing API (vendored in this repo at
+[`targets/eathub/`](targets/eathub/), threat-modeled in
+[`THREAT_MODEL.md`](THREAT_MODEL.md)). The three approaches:
 
-This repo is not maintained and is not accepting contributions.
+| | Scope | Method | Verification |
+|---|---|---|---|
+| **`/security-review`** | Diff only (`main` → branch) | Single-pass LLM read + independent FP filter | None — reasoning only |
+| **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only |
+| **Reference pipeline** (`vuln-pipeline`, this repo) | HTTP-reachable attack surface only | Agent writes a PoC, replays it against a live sandboxed instance | Execution — a detector oracle actually has to fire, twice, in two separate containers |
 
-> 🔒 **Want a managed option?** Anthropic offers
-> [Claude Security](https://claude.com/product/claude-security), a hosted product
-> that finds and fixes vulnerabilities in your source code across multiple
-> projects. Claude Security scans your repository for vulnerabilities,
-> applies a multi-stage verification pipeline to reduce false positives, and
-> lets you manage findings through their lifecycle: triage, fix validation,
-> and rapid fix generation.
->
-> This repository is an open-source reference implementation based on general
-> best practices for finding vulnerabilities using Claude. You can use it to
-> build your own vulnerability finding pipeline, customize the logic, and it
-> can be used with whatever access you have to Claude APIs (including
-> Bedrock, Vertex, or Azure).
-
-## Contents
-
-- **Claude Code skills**: `/quickstart`, `/threat-model`, `/vuln-scan`,
-  `/triage`, `/patch`, `/customize`: interactive scoping, scanning, triage,
-  and patching. Open this repo in Claude Code and run `/quickstart` to get
-  oriented.
-- **`harness/`**: the autonomous reference pipeline (recon → find → verify
-  → report → patch), configured for finding security-property violations in a
-  web application (Express/SQLite) by replaying HTTP PoCs against it in a
-  sandbox. (It began as a C/C++ + AddressSanitizer demo and was ported to web
-  via `/customize`.) This harness is a **reference, not a product**. The general
-  shape, prompts, and sandboxing are reusable, but the harness will not work on
-  every codebase out of the box. Run `/customize` to port it to your language,
-  detector, or vuln class.
-- **Detection & response**: the `/dnr-hunt` and `/dnr-respond` skills plus
-  `dnr_harness/`, their autonomous mirror (`dnr-pipeline`). Everything else
-  in this repo is preventive; this track assumes an attacker is already in
-  the logs — hunt the corpus, scope the damage, and propose a response.
-  Demo target: `targets/dnrcanary/`. See
-  [docs/detection-response.md](docs/detection-response.md).
-
-> ⚠️ **Security:** `/quickstart`, `/threat-model`, `/vuln-scan`, and `/triage`
-> only read and write files. Running `/patch` on static findings (`TRIAGE.json`
-> or `VULN-FINDINGS.json`) is likewise read- and write-only. `/customize` edits
-> the harness code and runs validation commands. Any of these skills are safe to
-> run unsandboxed, as long as you review and approve each tool use in Claude Code.
-> The autonomous pipelines (`vuln-pipeline`, `dnr-pipeline`, and `/patch` on
-> pipeline results) **execute target code**, so they refuse to run outside of
-> a gVisor sandbox
-> unless explicitly overridden. To get set up, run `scripts/setup_sandbox.sh` once,
-> then invoke the pipeline via `bin/vp-sandboxed`. The detection & response
-> skills (`/dnr-hunt`, `/dnr-respond`) additionally run the demo app on
-> `127.0.0.1` to verify PoCs. See [docs/security.md](docs/security.md)
-> and [docs/agent-sandbox.md](docs/agent-sandbox.md) for more details.
-
-## Getting Started
-
-```bash
-git clone https://github.com/anthropics/defending-code-reference-harness
-cd defending-code-reference-harness
-claude
-
-# 30-sec intro + guided first run on the eathub target
-> /quickstart
-
-> /quickstart how do I port the pipeline to Java?
-> /quickstart how do I triage all these bugs?
-```
-
-## Further Reading
-
-- [**Blog Post**](docs/blog-post.md) · The accompanying blog post with learnings + best practices
-- [**Pipeline**](docs/pipeline.md) · How it works: diagram, stages, CLI flags
-- [**Security**](docs/security.md) · Sandboxing, what not to mount
-- [**Agent sandbox**](docs/agent-sandbox.md) · gVisor isolation + egress allowlist for every agent
-- [**Best practices**](docs/best-practices.md) · Field-tested principles: verification, severity, iteration, large codebases
-- [**Prompting**](docs/prompting.md) · Prompting the model for defensive security tasks
-- [**Threat model**](docs/threat-model.md) · Why a threat model cuts false positives, and the `/threat-model` skill
-- [**Detection & response**](docs/detection-response.md) · Hunting an attacker already in the logs; the D&R skills and pipeline
-- [**Customize**](docs/customizing.md) · Port to my stack; which files change and why
-- [**Patching**](docs/patching.md) · Generate and verify fixes for verified crashes
-- [**Other use cases**](docs/other-use-cases.md) · Binary analysis, embedded, bug chains, threat intel
-- [**Troubleshooting**](docs/troubleshooting.md) · Duplicates, rate limits, subagent model pinning
-- [**Safeguards**](https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude) · Block for dangerous cyber work
+The short version: `/security-review` is cheap and fast but only sees your
+diff; the static skill scan sees everything but produces things that need a
+human (or a second pass) to believe; the reference pipeline produces the
+fewest false positives because it has to actually break the app, at the cost
+of only covering what it can reach and exploit inside a sandbox.
 
 ---
 
-## Ramp Up
+## 1. `/security-review` — diff-only skill
 
-The most successful security teams we've partnered with are those 
-that have gotten hands-on the fastest. Though it's tempting to 
-spend months designing the perfect pipeline, we recommend starting
-small on Day 1 and building from there as learnings come. The
-steps below follow that pattern and set an ambitious (but reasonable)
-pace based on what we've seen.
+This is the built-in
+[`claude-code-security-review`](https://github.com/anthropics/claude-code-security-review)
+skill, not something this repo ships. It requires git and only diffs the
+current branch against `main` — it is meant for small, incremental changes,
+not a full codebase audit.
 
-|                                                                                     |              |                                                              |
-|-------------------------------------------------------------------------------------|--------------|--------------------------------------------------------------|
-| [Step 1](#step-1-day-1-build-a-threat-model-and-run-your-first-static-scan--triage) | **Day 1**    | Build a threat model and run your first static scan + triage |
-| [Step 2](#step-2-day-2-run-the-reference-pipeline-on-a-web-app)                     | **Day 2**    | Run the reference pipeline on a web application              | 
-| [Step 3](#step-3-days-3-5-customize-the-pipeline-for-your-target)                   | **Days 3-5** | Customize the pipeline for your target                       |
-| [Step 4](#step-4-week-2-start-autonomous-scanning-triage-and-patching)              | **Week 2**   | Start autonomous scanning, triage, and patching              | 
-| [Step 5](#step-5-optional-detection--response)                                      | **Optional** | Hunt a planted campaign in logs (detection & response)       | 
+**Run:** Opus 5, against the branch that added the backend logging feature
+(pino logger, `pino-http` request-logging middleware, audit events). Cheap —
+few commits in the diff, so little to read.
 
-### Step 1 (Day 1): Build a threat model and run your first static scan + triage
+**Result:** [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) — one confirmed
+**Medium**, two candidates raised and then rejected by its own false-positive
+pass:
 
-Day 1 is focused on seeing the whole loop end-to-end. Using only the 
-interactive skills, you'll build a threat model, run a static scan scoped 
-by it, triage what comes back, and draft candidate fixes. You'll finish 
-the day with a threat model, a ranked list of static findings, and candidate 
-patches.
+| # | Finding | Verdict |
+|---|---|---|
+| Plaintext credentials written to logs via the error serializer (`index.js:70`) | **Confirmed — Medium** |
+| Correlation id taken from client-controlled `X-Request-Id` (`request_log.js:47`) | Rejected (false positive) |
+| `trust proxy` makes the logged `ip` spoofable (`index.js:40`) | Rejected (false positive) |
 
-The relevant skills **only read and write files** in your repo. As long as you 
-run Claude Code interactively and approve each tool use, no sandbox is needed.
+The confirmed finding: the new error handler logs the full error object
+(`req.log.error({ err }, 'unhandled error')`), and `pino`'s default error
+serializer copies every enumerable own property onto the log line — including
+the raw request body that `body-parser` attaches to a JSON-parse-failure
+error. A malformed signup/login POST puts the victim's plaintext password and
+email into the retained log stream. Full chain in
+[`SECURITY-REVIEW.md`](SECURITY-REVIEW.md#finding-1--plaintext-credentials-written-to-logs-via-the-error-serializer).
 
-```bash
-# Pin every subagent to the model you want
-export CLAUDE_CODE_SUBAGENT_MODEL=<model-id>
-claude
+**On "the harness found this too, but downgraded it because the app is
+dev-only":** that's not quite what happened, worth correcting. The static
+scan's [`VULN-FINDINGS.md`](VULN-FINDINGS.md) does contain an entry at the
+same line numbers —
 
-# 0. intro + guided first run
-> /quickstart
+> **Error middleware does not leak.** `index.js:68-75` returns a generic
+> message and logs the error server-side; no stack or SQL text reaches the
+> response.
 
-# 1. Build a threat model (aim before you shoot)
-> /threat-model bootstrap targets/eathub/app
+— under "Checked and clean." But `VULN-FINDINGS.md` is timestamped
+`2026-08-15T07:59:02Z`, and its target directory predates the logging-feature
+branch: at that point `index.js`'s error handler still did
+`console.error(err.message)` — a genuinely clean line. The static scan never
+re-ran against the branch that introduced the vulnerable `req.log.error({ err
+})` call, so it didn't re-examine the same code after it changed; it isn't a
+case of the harness independently confirming the bug and then talking itself
+out of it. And on severity: [`THREAT_MODEL.md`](THREAT_MODEL.md) and
+[`TRIAGE.md`](TRIAGE.md) both score findings against the **intended
+production deployment**, not the current local-only state, on purpose (TRIAGE
+context line: *"environment = internet-facing web service (judged against the
+intended public deployment, not the current local-only state)"*) — so "it's
+only dev, devs are the only ones reading the logs" is not how this repo's
+triage policy would have scored it either, had it seen the finding.
 
-# 2. Run a static scan, scoped by that threat model
-> /vuln-scan targets/eathub/app
+**What it structurally can't catch**, per the skill's own [false-positive
+filtering
+policy](https://github.com/anthropics/claude-code-security-review#false-positive-filtering):
+denial-of-service, rate-limiting concerns, memory/CPU exhaustion, generic
+input validation without proven impact, and open-redirect issues are all
+filtered out by design, not missed by accident. This run's own "Excluded by
+policy" line adds a few more: resource exhaustion, secrets at rest on disk,
+missing hardening measures, log spoofing, and findings confined to
+documentation.
 
-# 3. Verify, dedupe, and rank what came back
-> /triage targets/eathub/app/VULN-FINDINGS.json
+---
 
-# 4. Generate candidate fixes for the verified findings
-> /patch ./TRIAGE.json --repo targets/eathub/app
-```
+## 2. `defending-code-reference-harness` scan (this repo)
 
-This flow produces `THREAT_MODEL.md`, `VULN-FINDINGS.{json,md}`, 
-`TRIAGE.{json,md}`, and `PATCHES/`.
+This repo (`vuln-pipeline` + its skills) is built for whole-codebase, ongoing
+scanning rather than one diff. It has two genuinely different halves:
 
-The vulnerability candidates produced in Step 1 come from Claude's static 
-review of the source (nothing is built or run), so expect more false positives.
-In Step 2, you'll produce *execution-verified* findings.
+### 2a. Static skill scan
 
-### Step 2 (Day 2): Run the reference pipeline on a web application
+Three skills, meant to be run in sequence and re-run as the codebase changes:
 
-On Day 2, you'll move from interactive skills to your first autonomous
-run using the reference pipeline. You'll run the full recon → find → 
-verify → report loop in your environment on the bundled EatHub web app
-(Express/SQLite), then generate a candidate patch for what it finds. You'll
-finish with a set of reproducible findings, exploitability reports, and
-candidate patches, along with a feel for how the pipeline works.
+| Skill | Purpose | Output |
+|---|---|---|
+| [`/threat-model`](.claude/skills/threat-model/) | Profile the target — who accesses it, trust boundaries, assets, attack surface. Run once unless the app or its rules change. | [`THREAT_MODEL.md`](THREAT_MODEL.md) |
+| [`/vuln-scan`](.claude/skills/vuln-scan/) | Broad static read across the whole tree — finds everything, including false positives, no code execution | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) |
+| [`/triage`](.claude/skills/triage/) | Spins up 3 independent subagents per finding to vote real/false-positive, dedupes, re-ranks by derived exploitability | [`TRIAGE.md`](TRIAGE.md) |
+| `/patch` | Generates candidate fixes | *(not run this pass)* |
 
-Running the pipeline is simple:
+**Run:** interactively, across two ~5-hour Claude Pro sessions (token-heavy —
+each finding gets three separate verifier subagents plus a ranking pass).
 
-```bash
-# One-time setup
-python3 -m venv .venv && .venv/bin/pip install -e .
-./scripts/setup_sandbox.sh   # installs gVisor, builds the agent images, and verifies isolation; note: requires Docker
-export ANTHROPIC_API_KEY=sk-ant-...   # or CLAUDE_CODE_OAUTH_TOKEN, or Bedrock — see docs/agent-sandbox.md
+**Result:** [`VULN-FINDINGS.md`](VULN-FINDINGS.md) surfaced **13 raw
+findings** (4 HIGH / 5 MEDIUM / 4 LOW, several sub-0.4-confidence). After
+[`TRIAGE.md`](TRIAGE.md)'s adversarial re-verification: **0 duplicates, 6
+false positives, 7 acted-on (2 HIGH / 4 MEDIUM / 1 LOW)** — two of the seven
+(one MEDIUM, the LOW) are flagged `needs_manual_test` because a session limit
+killed their verifier agents mid-run rather than because of an analytical
+call (see the caveat at the top of `TRIAGE.md`).
 
-# Run the recon → find → verify → report loop
-bin/vp-sandboxed run eathub --model <model-id> --runs 3 --parallel --stream --auto-focus
-# Generate a candidate patch for each finding
-bin/vp-sandboxed patch results/eathub/<timestamp>/ --model <model-id>
+The two HIGH findings that survived triage:
 
-# Or, ask Claude Code to launch the pipeline and watch the run for you
-claude
-> run the pipeline on eathub and explain findings as they come
-```
+- **Account takeover via Google sign-in linking** — an attacker pre-registers
+  a victim's email locally, the victim later signs in with Google, and the app
+  sets `email_verified = 1` on the pre-existing row without checking who
+  created it — the attacker's own password now unlocks the victim's account
+  (`db.js:553`).
+- **Upload extension trusted from the client** — a `.html`/`.svg` upload is
+  served back same-origin with no content-type sniffing or CSP, giving stored
+  XSS on the app's own origin (`file_uploud.js:10`).
 
-Results from the loop land in a `results/eathub/<timestamp>/` directory. With 
-the `--stream` flag, the first report will appear in minutes under `reports/bug_NN/`.
+Notably, `TRIAGE.md` also **downgraded or killed** several of the raw scan's
+own claims after independent verification — a session-secret hardcoded
+fallback that looked like a full auth bypass turned out not to be exploitable
+against a server-side session store; a SQL-injection claim on the internal
+query helpers was unanimously rejected because every call site uses literal
+identifiers. Worth reading `TRIAGE.md`'s "What the verifiers changed" section
+before acting on any of its list.
 
-> ⚠️ **`run` spawns autonomous agents.** The pipeline runs each agent
-> inside a gVisor container with egress restricted to the Claude API.
-> Agent-spawning subcommands refuse to start outside it unless explicitly 
-> overridden. For more information, see [docs/security.md](docs/security.md)
-> and [docs/agent-sandbox.md](docs/agent-sandbox.md).
+### 2b. Reference pipeline (`vuln-pipeline`)
 
-Under the hood, the pipeline walks through seven stages:
+The part that actually runs the app. `recon → find → grade ("verify") →
+report → patch`, in a loop, each find/grade/report agent in its own gVisor
+sandbox with only a JSON PoC crossing the trust boundary between them.
+Because there's originally only a C/C++ + AddressSanitizer harness in this
+repo, the EatHub target had to be built with `/customize` first — porting the
+detector from ASAN crashes to a `run_poc.js` runner that replays an HTTP PoC
+and checks a set of security oracles (data-integrity violations,
+cross-account access, origin escape, CORS misconfiguration, unsafe uploaded
+content-type, info disclosure, uncaught exceptions, unexpected 5xx, hangs —
+full table in [`targets/eathub/README.md`](targets/eathub/README.md#the-oracle-set)).
 
-1. **Build**: Builds the target into a Docker image — the application, its
-dependencies, and the replay runner. The pipeline builds this image
-automatically on first run using the target's `Dockerfile`.
-2. **Recon**: A lightweight agent reads the source inside a network-isolated
-container and proposes a partition, i.e., *"here are N distinct route groups
-worth attacking separately"*, so that parallel find agents explore different
-areas instead of converging on the same bug. Without the `--auto-focus`
-flag, the pipeline uses the `focus_areas` list from the target's `config.yaml`.
-3. **Find**: N agents run in parallel, each in its own isolated container.
-Each agent reads the source, writes a JSON replay PoC, and runs it through the
-runner until a given PoC fires the same security oracle 3 out of 3 times.
-4. **Verify**: A separate grader agent reproduces each finding in a fresh
-container that the find agent hasn't touched. The only thing that crosses over
-from the find agent to the grader is the proof of concept it produced.
-5. **Dedupe**: A judge agent compares verified findings against bugs already
-reported and decides whether each is a new bug, a better example of a known
-bug, or a duplicate to skip.
-6. **Report**: A report agent writes a structured exploitability analysis per
-unique bug, including details on precondition, capability, reachability,
-blast radius, persistence, and severity.
-7. **Patch** (the separate patch command above): A patch agent writes a proposed
-fix, and a grader agent confirms that the new code passes its checks, that the
-original proof of concept no longer fires an oracle, that the target's test
-suite still passes, and that a fresh find agent can't find a way around the fix.
+**Available subcommands** (what each does, and why some weren't part of this
+pass):
 
-For more details, see [docs/pipeline.md](docs/pipeline.md).
+| Command | Does | Used this pass? |
+|---|---|---|
+| `vuln-pipeline recon <target>` | Proposes focus areas from the source | Implicitly, via `--auto-focus` |
+| `vuln-pipeline run <target> --runs N --parallel --stream` | Find + grade + judge + report, streamed as each crash lands | **Yes** — this is the "recon → find → verify → report" loop |
+| `vuln-pipeline dedup <results_dir>` | Groups crashes by signature (batch mode only, superseded by the streaming judge) | No — `--stream` handles dedup live |
+| `vuln-pipeline report <results_dir>` | Standalone exploitability report per unique crash (batch-mode recovery) | No — folded into `--stream` |
+| `vuln-pipeline patch <results_dir>` | Generates + verifies a fix per unique crash, `--novelty` disabled for this target since it has no real upstream | **No** — patch phase skipped for this pass, same as the static-scan side |
 
-### Step 3 (Days 3-5): Customize the pipeline for your target
+**Run:** Sonnet 5, `run --stream` (recon-informed focus areas, then find +
+grade in a loop) — the most token-intensive of the three, since every find,
+grade, and report step is its own agent inside its own container.
 
-On Days 3-5, you'll customize the harness for your own target. First, you'll
-point the Step 1 skills at your code, then you'll use `/customize` to port the
-pipeline to your stack. By the end of the week, you'll have a `targets/<your-service>/`
-directory that the pipeline can run against, validated with a single smoke run
-of the pipeline, and ready to scale up in Step 4.
+**Scope, honestly:** the sandbox seeds a disposable instance with synthetic
+fixture data and **Google OAuth, SMTP, and the Gemini integration all
+unconfigured and disabled by design** — see
+[`targets/eathub/engagement_context.md`](targets/eathub/engagement_context.md)
+and the `attack_surface` note in
+[`targets/eathub/config.yaml`](targets/eathub/config.yaml). That's a
+deliberate scope cut, not an oversight: standing up a fake Google IdP inside
+the sandbox is new attack surface that can itself produce false positives, so
+it's called out as deferred v2 work rather than silently skipped. The
+practical effect matches what you'd expect — anything requiring a real OAuth
+round-trip is out of reach for this track, including both HIGH/MEDIUM
+findings from the static triage that hinge on the Google-linking flow
+(account takeover via email linking, and the missing OAuth `state`
+parameter). `targets/eathub/README.md`'s own coverage table against the
+triaged findings puts the pipeline's honest reach at **3 of the 7** triaged
+true positives (upload content-type confusion, CORS credential reflection,
+Host-header verification links) — the other four are either OAuth-gated,
+hardening-only with no reachable PoC (the session-secret fallback), or a
+measured non-issue (the ReDoS candidate ran in 0.26 ms at the body-size cap).
+The pipeline's flagship finding — a check-then-act race in the like/ranking
+counter (`db.js:140-201`) — **isn't in the static triage list at all**; it
+was only found because the pipeline can actually fire concurrent requests at
+a live process, which is the entire point of running it alongside the static
+scan rather than instead of it.
 
-The reference pipeline ships configured for a web application, but its shape is
-generic — it began as a C/C++ + ASAN demo and was ported to web via this same
-`/customize` skill. Porting it to a new vuln class or language just means
-answering the following questions for your target stack:
+> **Note on this run's actual output:** `results/` is gitignored by this repo
+> (it holds live per-run state — PoCs, transcripts, `reports/bug_NN/`) and
+> wasn't present on disk in this workspace when this summary was written, so
+> the bug-count/report figures for this specific pass aren't included here.
+> If you still have the `results/eathub/<timestamp>/` directory from the run,
+> point me at it (or paste `found_bugs.jsonl` / `reports/manifest.jsonl`) and
+> I'll fold the actual numbers into this table.
 
-| Question                                | Web reference (EatHub)              | Other targets (examples)                       |
-|-----------------------------------------|-------------------------------------|------------------------------------------------|
-| What signals a finding?                 | a security oracle fires (the runner) | ASAN crash / exception / canary file / DNS callback |
-| What does a proof of concept look like? | a JSON HTTP replay script           | crashing input file / tx list / test harness   |
-| How is the target built and run?        | `Dockerfile` + a replay runner      | your language's build in a container           |
+---
 
-Before customizing, point the Step 1 skills at your own code. As a reminder,
-they're read- and write-only, so they can run unsandboxed.
+## 3. Mythos / further reading
 
-```bash
-claude
+This repo's harness is described (in
+[`HARNESS-README.md`](HARNESS-README.md) and
+[`docs/blog-post.md`](docs/blog-post.md)) as a public reference
+implementation distilled from Anthropic's internal work with security teams
+during the Claude Mythos Preview — the same lineage as the hosted
+[Claude Security](https://claude.com/product/claude-security) product. The
+public writeups intentionally stop short of the part where an internal
+system actually attacks a target — that's the part this repo's
+`vuln-pipeline` reference-implements in the open, scoped down to a sandboxed
+toy target. What *is* shared publicly and is worth reading regardless of
+which of the three approaches above you use: the discovery → triage → patch
+loop, and using a threat model both to scope discovery (partition a large
+codebase, skip out-of-scope areas) and to calibrate triage severity — see
+`docs/blog-post.md`'s
+[triage section](docs/blog-post.md#5-triage-deduplicate-by-root-cause-rank-by-preconditions-and-impact).
 
-> /quickstart how do I customize this for ~/code/my-service?
+---
 
-> /threat-model bootstrap-then-interview ~/code/my-service
-> /vuln-scan ~/code/my-service
-> /triage ~/code/my-service/VULN-FINDINGS.json --repo ~/code/my-service
-```
+## Where to look
 
-Then, use the artifacts produced by those skills in the `/customize` skill, 
-which modifies the harness for your codebase.
-
-```bash
-> /customize use ~/code/my-service/{THREAT_MODEL.md,VULN-FINDINGS.json} and ./TRIAGE.md
-```
-
-When `/customize` is done, you'll have a `targets/my-service/` directory 
-set up. Validate it with a smoke run of the pipeline before scaling up.
-
-```bash
-bin/vp-sandboxed run my-service --model <model-id> --runs 1
-```
-
-For more details, see [docs/customizing.md](docs/customizing.md).
-
-### Step 4 (Week 2): Start autonomous scanning, triage, and patching
-
-In Week 2, you'll use the pipeline you customized in Step 3 on your own
-targets, adding an *outer* loop to the inner pipeline loop - run multiple
-pipeline scans, triage the findings from across those runs, patch based
-on prioritization, and repeat.
-
-```bash
-# Scan - run a wave of parallel runs against your target
-bin/vp-sandboxed run my-service --model <model-id> --runs 5 --parallel --stream --auto-focus
-
-# Triage - dedupe and rank every finding across all waves using your threat model
-> /triage results/my-service/ --repo ~/code/my-service --auto --votes 5
-
-# Patch - generate and validate fixes, starting with what triage ranked the highest
-> /patch results/my-service/<timestamp>/ --model <model-id>
-```
-
-> ⚠️ Follow the same sandboxing guidelines as in 
-> [Step 2](#step-2-day-2-run-the-reference-pipeline-on-a-cc-library)
-
-A given pipeline run already verifies and deduplicates its own findings.
-`/triage` works across many pipeline runs. When pointed at the `results/`
-directory, it collapses duplicates across all runs (and any static findings
-from `/vuln-scan` if present), recalibrates severity ratings against your
-threat model, and attempts to route every finding to the component owner.
-
-When possible, patching findings quickly helps keep the outer loop as 
-productive as possible. When findings are fixed, the model can't re-find
-them, and instead will surface net new, typically deeper issues. As you run
-more pipeline waves, the number of findings will likely go down, but the
-complexity will likely also go up. If quick patching isn't possible, even
-just recording prior findings in the target's `known_bugs` can help steer
-future runs toward newer bugs.
-
-Autonomous triage and patching are still open issues, and this reference
-harness doesn't fully solve them. The verification strategies in `/patch`
-help raise the bar, but severity and prioritization are ultimately
-judgments about your environment, and verified patches are not always
-upstreamable. Many partners have reported these steps as their current
-bottlenecks, and you should budget real engineering time for them.
-
-For more details, see [docs/triage.md](docs/triage.md) and 
-[docs/patching.md](docs/patching.md).
-
-### Step 5 (Optional): Detection & response
-
-Everything above is about finding vulnerabilities before an attacker does.
-The detection & response track is an example of how you may use Claude if an
-attacker is already in your systems and shows up in your logs: find them,
-scope the damage, and propose the response.
-
-The demo target is `targets/dnrcanary`, a deliberately vulnerable web app
-with a planted attack campaign hiding in a week of generated logs.
-
-```bash
-pip install flask pyyaml               # flask runs the app; pyyaml runs the grader
-python3 targets/dnrcanary/generate_logs.py --seed 42   # required first — logs are local-only
-
-> /dnr-hunt                       # no alert in hand: hunt the corpus
-> /dnr-respond INC-1              # lead in hand: verdict, blast radius, proposed plan
-python3 targets/dnrcanary/grade.py results/dnrcanary/<ts>/INCIDENTS.json   # self-score against ground truth
-```
-
-The same exercise also runs unattended, mirroring how `vuln-pipeline`
-mirrors the interactive scanning skills:
-
-```bash
-bin/vp-sandboxed dnr-pipeline run targets/dnrcanary --model <model-id>
-```
-
-Confirmed vulnerabilities flow into the same `/triage` → `/patch` loop as
-the static track.
-
-→ Deeper: [docs/detection-response.md](docs/detection-response.md)
-
-## Looking Forward
-
-After the initial ramp up, the teams we've worked with have tended to invest in a
-few directions:
-
-1. Reviewing all their internal repos and key open-source dependencies,
-ranking which are the most important to scan (e.g., based on their exposure, 
-history of CVEs, business-criticality), then working through scanning the
-list in priority order.
-2. Setting up bespoke infrastructure for scanning to move scans off of laptops
-or one-off VMs. The most successful teams resist the urge to build the perfect
-scanning platform before scaling up.
-3. Incorporating scans into their SDLC. Some teams have set up recurring scans 
-(e.g., daily, weekly) or have added scanning into their CI pipelines.
-4. Testing and experimenting with the models to find what works best for them.
+- [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) — `/security-review` output (diff-only)
+- [`THREAT_MODEL.md`](THREAT_MODEL.md) — EatHub's threat model
+- [`VULN-FINDINGS.md`](VULN-FINDINGS.md) — raw static scan (`/vuln-scan`), 13 findings
+- [`TRIAGE.md`](TRIAGE.md) — triaged/verified static findings, 2 HIGH / 4 MEDIUM / 1 LOW
+- [`targets/eathub/`](targets/eathub/) — the vendored app, `run_poc.js` runner, oracle set, and the reference pipeline's coverage table against `TRIAGE.md`
+- [`https://github.com/smacica/Eathub`](https://github.com/smacica/Eathub) — the real upstream app these scans target
+- [`HARNESS-README.md`](HARNESS-README.md) — this repo's original upstream README (pipeline internals, setup, docs index)
