@@ -9,7 +9,7 @@ Express/SQLite recipe-sharing API (vendored in this repo at
 | | Scope | Method | Verification | Found | Results |
 |---|---|---|---|---|---|
 | **`/security-review`** | Diff only (`main` → branch) | Single-pass LLM read + independent FP filter | None — reasoning only | **1 MEDIUM** (2 more raised, then self-rejected) | [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) |
-| **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only | **2 HIGH / 4 MEDIUM / 1 LOW** (from 13 raw: 4H/5M/4L) | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) → [`TRIAGE.md`](TRIAGE.md) |
+| **Static skill scan** (this repo) | Whole codebase | LLM read, broad, then multi-agent triage | 3-vote adversarial re-verification per finding, still reasoning only | **2 HIGH / 4 MEDIUM / 1 LOW** (from 13 raw: 4H/5M/4L) — [2 more it couldn't verify](#what-neither-approach-could-verify) | [`VULN-FINDINGS.md`](VULN-FINDINGS.md) → [`TRIAGE.md`](TRIAGE.md) |
 | **Reference pipeline** (`vuln-pipeline`, this repo) | HTTP-reachable attack surface only | Agent writes a PoC, replays it against a live sandboxed instance | Execution — a detector oracle actually has to fire, twice, in two separate containers | **1 HIGH / 1 MEDIUM** (3 crashes submitted, 1 killed on review) | [`REFERENCE-PIPELINE.md`](REFERENCE-PIPELINE.md) |
 
 The short version:
@@ -54,20 +54,33 @@ branch against `main` — meant for incremental changes, not a codebase audit.
   email into the retained log stream.
 - Full chain: [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md#finding-1--plaintext-credentials-written-to-logs-via-the-error-serializer)
 
-### Correction: "the harness found this too but downgraded it as dev-only"
+### The static scan saw this code and cleared it
 
-Not what happened:
+The whole-codebase scan **had this vulnerability in scope and missed it** —
+worth stating plainly, because it's the sharpest result in this comparison:
 
-- [`VULN-FINDINGS.md`](VULN-FINDINGS.md) does have an entry at the same lines,
+- [`VULN-FINDINGS.md`](VULN-FINDINGS.md) has an entry at exactly these lines,
   under *Checked and clean*: *"Error middleware does not leak. `index.js:68-75`
-  returns a generic message and logs the error server-side."*
-- But it's timestamped `2026-08-15T07:59:02Z`, before the logging branch — at
-  that point the handler still did `console.error(err.message)`, a genuinely
-  clean line. The static scan never re-ran against the changed code.
+  returns a generic message and logs the error server-side; no stack or SQL
+  text reaches the response."*
+- That scan ran against the `harness-security-scan` tree, which has the
+  `backend-logging` branch as an ancestor — so `index.js:70` was already
+  `req.log.error({ err }, 'unhandled error')` when the scanner read it. Not a
+  stale checkout.
+- The scanner checked the **response** path (does a stack trace reach the
+  client?) and stopped there. It never asked what `pino`'s serializer puts on
+  the **log** line. `/security-review`, looking only at a handful of new
+  commits, did ask.
 - On severity: [`THREAT_MODEL.md`](THREAT_MODEL.md) and
-  [`TRIAGE.md`](TRIAGE.md) both score against the **intended production
-  deployment**, not the current local-only state, deliberately — so "it's only
-  dev" isn't how this repo's triage policy would have scored it either.
+  [`TRIAGE.md`](TRIAGE.md) score against the **intended production
+  deployment**, not the current local-only state — so "it's only dev, only
+  devs read the logs" isn't how this repo's triage policy would have scored it
+  either, had it been raised.
+
+**The lesson isn't that one tool beats the other** — it's attention budget. A
+broad scan spends a fixed amount of reasoning per file over the whole tree; a
+diff review spends all of it on the twelve lines that just changed. Run both,
+and run the broad scan again after a feature lands.
 
 **What it structurally can't catch**, per the skill's own [false-positive
 policy](https://github.com/anthropics/claude-code-security-review#false-positive-filtering):
@@ -108,9 +121,7 @@ Three skills, run in sequence, re-runnable as the codebase changes:
   5 MEDIUM / 4 LOW, several under 0.4 confidence).
 - **Triaged:** [`TRIAGE.md`](TRIAGE.md) — 0 duplicates, 6 false positives,
   7 acted-on (**2 HIGH / 4 MEDIUM / 1 LOW**). Two of the seven are flagged
-  `needs_manual_test` because a session limit killed their verifier agents
-  mid-run, not because of an analytical call (see the caveat at the top of
-  `TRIAGE.md`).
+  `needs_manual_test` — see [below](#what-neither-approach-could-verify).
 
 **The two HIGH findings that survived triage:**
 
@@ -128,6 +139,19 @@ against a server-side session store; a SQL-injection claim on the internal
 query helpers was unanimously rejected because every call site uses literal
 identifiers. Read [`TRIAGE.md`](TRIAGE.md)'s "What the verifiers changed"
 before acting on its list.
+
+**Two findings it could not settle** (`needs_manual_test` in `TRIAGE.md`):
+
+- **f005 — Host-header verification links** (MEDIUM, `routes/user.js:19`) —
+  all 3 verifiers voted true positive, but one precondition is *platform*
+  behaviour: does the ingress forward a request with an unrecognised `Host`,
+  or reject it? No amount of source reading settles that. `TRIAGE.md`'s own
+  words: *"Recommend a human build a PoC; static reasoning hit its limit."*
+- **f013 — unbounded email regex / ReDoS** (LOW, `routes/user.js:23`) —
+  **0 votes.** All three verifier agents were killed by a session limit before
+  returning a verdict, and there was no time to retry before reset. Carried
+  forward under the recall policy rather than dropped, because that's an
+  infrastructure failure, not an analytical judgment.
 
 ### 2b. Reference pipeline (`vuln-pipeline`)
 
@@ -194,14 +218,39 @@ whether the violated invariant was ever an invariant.
 - `targets/eathub/README.md`'s coverage table puts the pipeline's honest reach
   at **3 of the 7** triaged true positives (upload content-type confusion,
   CORS credential reflection, Host-header verification links). The other four
-  are OAuth-gated, hardening-only with no reachable PoC (the session-secret
-  fallback), or a measured non-issue (the ReDoS candidate ran in 0.26 ms at
-  the body-size cap).
+  are itemised [below](#what-neither-approach-could-verify).
 - The flagship finding — the check-then-act race in the like/ranking counter
   (`db.js:140-201`, `bug_00` above) — **isn't in the static triage list at
   all.** It was only found because the pipeline can fire concurrent requests
   at a live process. That's the argument for running it *alongside* the static
   scan, not instead of it.
+
+---
+
+## What neither approach could verify
+
+Every finding that is still an open question — nothing below has been proven
+real *or* disproven. Listed so it doesn't quietly disappear between the two
+result files.
+
+| Finding | Sev | Static verdict | Why the pipeline can't settle it | What it needs |
+|---|---|---|---|---|
+| **Google sign-in links a pre-registered local account** (`db.js:553`, f001) | HIGH | 3/3 true positive | Google OAuth is unconfigured in the sandbox by design — no IdP to round-trip against | A local fake IdP + `GOOGLE_CLIENT_ID` in the seed (deferred v2) |
+| **OAuth flow omits `state`** (`google_strategy.js:13`, f004) | MED | true positive | Same — the whole OAuth path is disabled | Same OAuth stub |
+| **Host-header verification links** (`routes/user.js:19`, f005) | MED | **`needs_manual_test`** — 3/3 true positive, but blocked on a precondition | The `ORIGIN_ESCAPE` oracle *does* cover it in the sandbox — but the open question is whether the real ingress forwards an unrecognised `Host` or rejects it, which no sandbox answers | A test against the actual deployment platform (DigitalOcean routes by Host) |
+| **`SESSION_SECRET` dev fallback** (`session_config.js:22`, f003) | MED | true positive, but the scanner's auth-bypass mechanism was refuted | No reachable PoC — it's a fail-open hardening defect, and the server-side session store means a known secret still can't mint a session | Nothing to execute; fix on principle |
+| **Unbounded email regex / ReDoS** (`routes/user.js:23`, f013) | LOW | **`needs_manual_test`** — **0 votes**, all 3 verifiers killed by a session limit | Measured, and it's a non-issue: **0.26 ms** at the 100 kB body cap | Effectively settled by measurement; the 254-char cap costs nothing anyway |
+
+Reading it back:
+
+- **2 findings are open because of the tooling** — f005 and f013 are the two
+  `needs_manual_test` entries. f013 is the only one that failed for a boring
+  reason (session limit), and the pipeline has since measured it into
+  irrelevance. f005 is the one genuinely worth a human hour.
+- **2 more are open because of a deliberate scope cut** — f001 and f004 both
+  need the OAuth stub. f001 is a HIGH, so this is the most expensive gap in
+  the whole comparison.
+- **1 is open by nature** — f003 has no PoC to write, in any harness.
 
 ---
 
