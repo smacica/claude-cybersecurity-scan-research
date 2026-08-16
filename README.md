@@ -56,62 +56,48 @@ branch against `main` — meant for incremental changes, not a codebase audit.
 
 ### Why the static scan cleared the same code — the threat model did it
 
-The whole-codebase scan **read these exact lines and passed them**. The
-interesting part is *why*, and the answer is the threat model, not the scanner:
+The whole-codebase scan read these exact lines and passed them — and the cause
+is the threat model, not the scanner. [`VULN-FINDINGS.md`](VULN-FINDINGS.md)
+files `index.js:68-75` under *Checked and clean* (*"returns a generic message
+and logs the error server-side; no stack or SQL text reaches the response"*),
+and it wasn't a stale checkout: the scanned tree has `backend-logging` as an
+ancestor, so line 70 was already `req.log.error({ err })`. But the scan was
+**scoped by [`THREAT_MODEL.md`](THREAT_MODEL.md) sections 3 and 4**, and that
+document had already closed the question — T5's mitigation column asserts
+outright that *"secrets are never written to logs"*, and logs appear in the
+model **only as an integrity asset** (§2 and T20 ask *can an attacker corrupt
+the log?*, never *what confidential data lands in it?*). So the scanner checked
+the response path — the question the model actually posed — answered it
+correctly, and stopped. Note what did *not* cause this: the local-only framing.
+`THREAT_MODEL.md:15-23` scores threats **"against the deployment the README
+documents and the owner intends"** regardless. **The lesson is that a
+threat-model-scoped scan inherits the model's blind spots, including its
+confident ones** — treat asserted mitigations as claims to verify, not as scope
+reductions, and re-run the model when a feature changes the shape of the system
+(structured logging turned logs into a new data sink; the model still called
+them an integrity concern).
 
-- [`VULN-FINDINGS.md`](VULN-FINDINGS.md) has an entry at exactly these lines,
-  under *Checked and clean*: *"Error middleware does not leak. `index.js:68-75`
-  returns a generic message and logs the error server-side; no stack or SQL
-  text reaches the response."*
-- Not a stale checkout: the scan ran against the `harness-security-scan` tree,
-  which has `backend-logging` as an ancestor, so `index.js:70` was already
-  `req.log.error({ err }, 'unhandled error')` when the scanner read it.
-- The scan was **scoped by `THREAT_MODEL.md` sections 3 and 4** — its own
-  header says so. It inherited that document's picture of what matters.
+### What this scan cannot find
 
-**Three things in [`THREAT_MODEL.md`](THREAT_MODEL.md) closed the question
-before the scanner got there:**
+Filtered out by design, per the skill's own [false-positive filtering
+policy](https://github.com/anthropics/claude-code-security-review#false-positive-filtering)
+— not missed by accident:
 
-- **T5's mitigation column asserts it outright: *"secrets are never written to
-  logs"*** — stated as an existing control, not as an open question. A
-  threat-model-scoped scan treats that as settled and moves on.
-- **Logs appear in the model only as an *integrity* asset.** "Audit and request
-  log integrity" (§2) and T20 (forged attribution via spoofed headers) both ask
-  *can an attacker corrupt the log?* — never *what confidential data lands in
-  it?* There is no threat covering logs as a confidentiality sink anywhere in
-  the model.
-- **So "what does `pino`'s error serializer put on the line" was never in the
-  brief.** The scanner checked the response path — does a stack trace reach the
-  client? — which is the question the threat model actually posed, answered it
-  correctly, and stopped.
+- Denial of Service vulnerabilities
+- Rate limiting concerns
+- Memory/CPU exhaustion issues
+- Generic input validation without proven impact
+- Open redirect vulnerabilities
 
-**What it is *not*:** the local-only framing. `THREAT_MODEL.md:15-23` is
-explicit that the app "runs in local development only and has never been
-deployed" but that threats are **"nonetheless scored against the deployment the
-README documents and the owner intends… Scoring against the intended
-deployment is deliberate."** Nothing was downgraded for being dev-only —
-[`TRIAGE.md`](TRIAGE.md) applies the same rule.
+This run's own "Excluded by policy" line adds: resource exhaustion, secrets at
+rest on disk, missing hardening measures, log spoofing, and findings confined
+to documentation.
 
-**The lesson: a threat-model-scoped scan inherits the threat model's blind
-spots, including its confident ones.** A mitigation *asserted* in the model
-(`secrets are never written to logs`) is a claim, not a verified fact, and
-the scan will not re-derive it. `/security-review` had no threat model at all,
-read the diff cold, and therefore asked a question the model had already
-declared answered. Two practical consequences:
-
-- Treat mitigation claims in a threat model as **assertions to verify**, not
-  as scope reductions. This one was true when written and false three commits
-  later.
-- Re-run the threat model when a feature changes the shape of the system.
-  Structured logging turned logs into a new data sink; the model still
-  described them as an integrity concern only.
-
-**What it structurally can't catch**, per the skill's own [false-positive
-policy](https://github.com/anthropics/claude-code-security-review#false-positive-filtering):
-DoS, rate limiting, memory/CPU exhaustion, input validation without proven
-impact, open redirects. This run's own "Excluded by policy" line adds resource
-exhaustion, secrets at rest, missing hardening, log spoofing, and
-doc-only findings. Filtered by design, not missed by accident.
+Worth noting against the other two approaches: **the reference pipeline's
+flagship finding sits squarely inside this exclusion list.** The like/ranking
+race is a DoS-adjacent concurrency defect that also trips `SQLITE_BUSY` and
+hangs — `/security-review` would filter it out even if the race were in the
+diff.
 
 ---
 
