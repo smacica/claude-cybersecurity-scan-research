@@ -31,7 +31,7 @@ overlap is small on purpose: each approach found things the other two didn't.
 The built-in
 [`claude-code-security-review`](https://github.com/anthropics/claude-code-security-review)
 skill, not something this repo ships. Requires git, only diffs the current
-branch against `main` — meant for incremental changes, not a codebase audit.
+branch against `main` — meant for incremental changes, not a codebase audit. In this case, only the logging feature of the app was scanned.
 
 - **Run:** Opus 5, against the branch adding backend logging (pino logger,
   `pino-http` middleware, audit events). Cheap — few commits to read.
