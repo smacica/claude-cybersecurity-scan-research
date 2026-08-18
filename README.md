@@ -88,11 +88,6 @@ HTTP response leak anything?), answered it correctly, and stopped. It never
 asked the question `/security-review` asked (does the *log line* leak
 anything?), because the threat model had already closed that door.
 
-**One thing that did *not* cause the miss:** the local-only framing.
-`THREAT_MODEL.md:15-23` scores threats *"against the deployment the README
-documents and the owner intends"* regardless of scope — that framing isn't
-what let this through.
-
 **The lesson: the static scan is only as good as its threat model — and that
 threat model is written by the same pipeline.**
 
