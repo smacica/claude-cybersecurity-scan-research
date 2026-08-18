@@ -93,12 +93,37 @@ anything?), because the threat model had already closed that door.
 documents and the owner intends"* regardless of scope — that framing isn't
 what let this through.
 
-**The lesson:** a threat-model-scoped scan inherits the model's blind spots,
-including its confident ones. Treat asserted mitigations ("secrets are never
-logged") as claims to verify, not as reasons to skip a check. And re-run the
-threat model when a feature changes the shape of the system — structured
-logging turned logs into a new place secrets could leak, but the model still
-only tracked logs as an integrity concern.
+**The lesson: the static scan is only as good as its threat model — and that
+threat model is written by the same pipeline.**
+
+- [`/threat-model`](.claude/skills/threat-model/) runs *first* and produces
+  [`THREAT_MODEL.md`](THREAT_MODEL.md).
+  [`/vuln-scan`](.claude/skills/vuln-scan/) then uses that file to decide what
+  is worth looking at.
+- So a wrong assumption in the threat model doesn't just sit there — it quietly
+  takes things out of the scan's scope, and nothing downstream re-checks it.
+- That makes `THREAT_MODEL.md` the one file a human has to read line by line.
+  Every "mitigated" claim in it is a **model's guess, not a verified fact.**
+
+**Why this particular wrong assumption ended up in the file:**
+
+- T5 is about **application secrets** — `SESSION_SECRET`, API keys, the things
+  in `.env`. For those, *"secrets are never written to logs"* is true: no line
+  of code prints env config to a log.
+- But it was written as a blanket sentence, so it also reads as covering **user
+  passwords** — which it does not.
+- Passwords never reach the log through a log statement anyone wrote. They get
+  there by accident: `pino`'s default error serializer copies the raw request
+  body off a parse-failure error.
+- The threat model was built by reading the code and interviewing the owner
+  (`THREAT_MODEL.md:145-151`). Both methods show what the app *intends* to log.
+  Neither shows what a library quietly drags along with it.
+
+And re-run the threat model when a feature changes the shape of the app.
+Structured logging turned the log into a new place secrets could land, but the
+model was written treating logs only as something an attacker might *forge*
+(*"Audit and request log integrity"*) — never as something that might *hold*
+sensitive data.
 
 ### What this scan cannot find
 
