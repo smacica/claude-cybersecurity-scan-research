@@ -54,28 +54,56 @@ branch against `main` — meant for incremental changes, not a codebase audit. I
   email into the retained log stream.
 - Full chain: [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md#finding-1--plaintext-credentials-written-to-logs-via-the-error-serializer)
 
-### Why the static scan cleared the same code — the threat model did it
+### Comparison between this security review scan and the static skill scan
 
-The whole-codebase scan read these exact lines and passed them — and the cause
-is the threat model, not the scanner. [`VULN-FINDINGS.md`](VULN-FINDINGS.md)
-files `index.js:68-75` under *Checked and clean* (*"returns a generic message
-and logs the error server-side; no stack or SQL text reaches the response"*),
-and it wasn't a stale checkout: the scanned tree has `backend-logging` as an
-ancestor, so line 70 was already `req.log.error({ err })`. But the scan was
-**scoped by [`THREAT_MODEL.md`](THREAT_MODEL.md) sections 3 and 4**, and that
-document had already closed the question — T5's mitigation column asserts
-outright that *"secrets are never written to logs"*, and logs appear in the
-model **only as an integrity asset** (§2 and T20 ask *can an attacker corrupt
-the log?*, never *what confidential data lands in it?*). So the scanner checked
-the response path — the question the model actually posed — answered it
-correctly, and stopped. Note what did *not* cause this: the local-only framing.
-`THREAT_MODEL.md:15-23` scores threats **"against the deployment the README
-documents and the owner intends"** regardless. **The lesson is that a
-threat-model-scoped scan inherits the model's blind spots, including its
-confident ones** — treat asserted mitigations as claims to verify, not as scope
-reductions, and re-run the model when a feature changes the shape of the system
-(structured logging turned logs into a new data sink; the model still called
-them an integrity concern).
+`/security-review` verified one finding. Here's whether the static skill scan
+found that same bug, and if not, why.
+
+**The verified finding (`/security-review`):**
+
+| | |
+|---|---|
+| What | Plaintext credentials written to logs via the error serializer |
+| Where | `index.js:70` |
+| Verdict | Confirmed — Medium |
+
+**Did the static skill scan catch it?** No.
+
+- [`VULN-FINDINGS.md`](VULN-FINDINGS.md) files `index.js:68-75` under
+  *Checked and clean*, with the note *"returns a generic message and logs
+  the error server-side; no stack or SQL text reaches the response."*
+- This wasn't a stale checkout — the scanned tree already had the vulnerable
+  code (`backend-logging` merged in, line 70 already
+  `req.log.error({ err })`).
+- The scan looked at the right lines and still cleared them.
+
+**Why it missed it:**
+
+The static scan was scoped by [`THREAT_MODEL.md`](THREAT_MODEL.md) sections 3
+and 4 — and that document had already answered the wrong question about this
+code:
+
+| Where in `THREAT_MODEL.md` | What it says | Effect |
+|---|---|---|
+| T5, mitigation column | *"Secrets are never written to logs"* | Told the scanner this was already handled |
+| §2 and T20 | Logs are treated only as an **integrity** asset — can an attacker *corrupt* the log? | Never asked what *confidential data* ends up *in* the log |
+
+So the scanner checked the question the threat model actually posed (does the
+HTTP response leak anything?), answered it correctly, and stopped. It never
+asked the question `/security-review` asked (does the *log line* leak
+anything?), because the threat model had already closed that door.
+
+**One thing that did *not* cause the miss:** the local-only framing.
+`THREAT_MODEL.md:15-23` scores threats *"against the deployment the README
+documents and the owner intends"* regardless of scope — that framing isn't
+what let this through.
+
+**The lesson:** a threat-model-scoped scan inherits the model's blind spots,
+including its confident ones. Treat asserted mitigations ("secrets are never
+logged") as claims to verify, not as reasons to skip a check. And re-run the
+threat model when a feature changes the shape of the system — structured
+logging turned logs into a new place secrets could leak, but the model still
+only tracked logs as an integrity concern.
 
 ### What this scan cannot find
 
