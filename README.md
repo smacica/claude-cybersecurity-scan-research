@@ -72,16 +72,11 @@ found that same bug, and if not, why.
 - [`VULN-FINDINGS.md`](VULN-FINDINGS.md) files `index.js:68-75` under
   *Checked and clean*, with the note *"returns a generic message and logs
   the error server-side; no stack or SQL text reaches the response."*
-- This wasn't a stale checkout — the scanned tree already had the vulnerable
-  code (`backend-logging` merged in, line 70 already
-  `req.log.error({ err })`).
 - The scan looked at the right lines and still cleared them.
 
 **Why it missed it:**
 
-The static scan was scoped by [`THREAT_MODEL.md`](THREAT_MODEL.md) sections 3
-and 4 — and that document had already answered the wrong question about this
-code:
+The static scan was scoped by [`THREAT_MODEL.md`](THREAT_MODEL.md)
 
 | Where in `THREAT_MODEL.md` | What it says | Effect |
 |---|---|---|
