@@ -282,19 +282,7 @@ whether the violated invariant was ever an invariant.
 
 ## Findings without an execution PoC
 
-Cross-cutting between §2a and §2b, which is why it sits outside both. **Two
-different kinds of "unverified" get confused here, so they're split.** The
-first group is settled — it just has no PoC. The second is genuinely open.
-
-(`/security-review` isn't in scope for this table — it only ever saw one
-branch's diff. What it structurally cannot find is listed in
-[§1](#what-this-scan-cannot-find).)
-
-### Confirmed by triage — only the execution PoC is missing
-
-These are **not** open questions. All three carry unanimous verifier votes and
-line-level evidence in [`TRIAGE.md`](TRIAGE.md); they are actionable today. The
-pipeline simply can't reach them, so no crash artifact exists.
+### Confirmed by triage — only the execution PoC (reference pipeline) is missing
 
 | Finding | Sev | `TRIAGE.md` verdict | Why the pipeline can't reach it |
 |---|---|---|---|
